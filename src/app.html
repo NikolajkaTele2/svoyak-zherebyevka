@@ -1,8 +1,6 @@
 <title>Своя игра: швейцарка</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Russo+One&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<!--FONTS-->
 <style>
 /* Layout: табло-полоса этапов сверху (как игровое табло), под ней рабочая область этапа; карточки боёв сеткой. */
 :root {
@@ -382,18 +380,22 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   function render() {
     const syncLabel = store.mode === 'db'
       ? (store.canWrite ? '<span class="dot on"></span>Сохраняется в артефакте, видно всем, у кого есть ссылка' : '<span class="dot on"></span>Режим просмотра: данные обновляются автоматически')
-      : '<span class="dot"></span>Сохраняется только в этом браузере';
+      : '<span class="dot on"></span>Данные хранятся на этом устройстве';
     let html = `
       <header class="top">
         <div style="display:grid;gap:4px;min-width:0">
           <span class="eyebrow">Своя игра · швейцарская система</span>
           <h1>${esc(state.name)}</h1>
         </div>
-        <div class="syncnote">${syncLabel}</div>
+        <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div class="syncnote">${syncLabel}</div></div>
       </header>
       <nav class="boardwrap" aria-label="Этапы турнира"><div class="board">${stageCells()}</div></nav>`;
     if (state.example) html += `<div class="banner"><p><b>Это пример турнира</b> на 31 участника: два тура сыграны, третий разыгран. Посмотрите, как всё устроено, затем начните свой турнир.</p>${canEdit() ? '<button class="btn primary" data-act="new-ask">Начать свой турнир</button>' : ''}</div>`;
-    if (ui.confirm === 'new') html += `<div class="banner warn"><p>Удалить всех участников и результаты и начать новый турнир? Отменить это нельзя. Если нужно, сначала сохраните резервную копию на вкладке «Участники».</p><div class="row"><button class="btn danger" data-act="new-do">Начать заново</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
+    if (ui.confirm === 'new') html += `<div class="banner warn"><p>Удалить всех участников и результаты и начать новый турнир? Отменить это нельзя. Если нужно, сначала сохраните турнир в файл на вкладке «Участники».</p><div class="row"><button class="btn danger" data-act="new-do">Начать заново</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
+    if (ui.pending) {
+      const p = ui.pending, played = p.tours.filter(SG.tourComplete).length;
+      html += `<div class="banner warn"><p>Открыть турнир «${esc(p.name || 'без названия')}»: ${p.players.length} ${plural(p.players.length, 'участник', 'участника', 'участников')}, сыграно туров: ${played} из 4? Текущий турнир на этом устройстве будет заменён.</p><div class="row"><button class="btn primary" data-act="open-do">Открыть</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
+    }
     if (ui.copyText !== null) html += `<div class="panel copybox"><p>Браузер не дал скопировать автоматически. Выделите текст и скопируйте вручную:</p><textarea id="copyfallback" readonly>${esc(ui.copyText)}</textarea><div><button class="btn" data-act="copy-close">Закрыть</button></div></div>`;
 
     const v = ui.tab;
@@ -452,10 +454,11 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
           </div>
         </section>
         <section class="panel">
-          <h2>Резервная копия</h2>
-          <p class="muted">Скопируйте данные турнира в заметки или мессенджер. Из копии турнир можно восстановить на любом устройстве.</p>
-          <div class="row"><button class="btn" data-act="export">Скопировать копию</button>${canEdit() ? '<button class="btn" data-act="import-toggle">Восстановить из копии</button>' : ''}</div>
-          ${ui.importOpen && canEdit() ? `<div class="field"><label for="importtxt">Вставьте текст копии или выберите файл</label><textarea id="importtxt" placeholder='{"v":1,...}'></textarea><input type="file" id="importfile" accept=".json,.txt,application/json,text/plain"><div class="row"><button class="btn primary" data-act="import-do">Восстановить</button></div></div>` : ''}
+          <h2>Файл турнира</h2>
+          <p class="muted">Сохраните турнир в файл, чтобы перенести его на другое устройство, передать другому судье или сохранить на память. Файл открывается в этом приложении где угодно, в том числе без интернета.</p>
+          <div class="row"><button class="btn" data-act="save-file">Сохранить в файл</button>${canEdit() ? '<label class="btn" for="openfile">Открыть файл…</label><input type="file" id="openfile" accept=".json,.txt,application/json,text/plain" hidden>' : ''}</div>
+          <div class="row"><button class="linkbtn" data-act="export">Скопировать текстом</button>${canEdit() ? '<button class="linkbtn" data-act="import-toggle">Вставить из текста</button>' : ''}</div>
+          ${ui.importOpen && canEdit() ? `<div class="field"><label for="importtxt">Вставьте текст копии турнира</label><textarea id="importtxt" placeholder='{"v":1,...}'></textarea><div class="row"><button class="btn primary" data-act="import-do">Открыть турнир</button></div></div>` : ''}
           ${canEdit() && !state.example ? '<div><button class="linkbtn" data-act="new-ask">Начать новый турнир</button></div>' : ''}
         </section>
       </div>
@@ -671,12 +674,67 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     else if (el.id === 'evenb') { state.settings.evenBattles = el.checked; save(); render(); }
     else if (el.dataset.fscore) { render(); }
     else if (el.dataset.score) { setTimeout(render, 0); } // после перехода фокуса: показать кнопку следующего тура и т.п.
-    else if (el.id === 'importfile' && el.files && el.files[0]) {
+    else if (el.id === 'openfile' && el.files && el.files[0]) {
       const fr = new FileReader();
-      fr.onload = () => { const ta = document.getElementById('importtxt'); if (ta) ta.value = String(fr.result || ''); };
+      fr.onload = () => {
+        const s = parseTournament(String(fr.result || ''));
+        if (!s) return toast('Этот файл не похож на файл турнира. Выберите .json, сохранённый этим приложением.');
+        ui.pending = s; render(); window.scrollTo({ top: 0 });
+      };
+      fr.onerror = () => toast('Не удалось прочитать файл');
       fr.readAsText(el.files[0]);
+      el.value = '';
     }
   });
+
+  /* ---------- файл турнира ---------- */
+  function parseTournament(text) {
+    try {
+      const s = JSON.parse(text);
+      if (!s || !Array.isArray(s.players) || !Array.isArray(s.tours)) return null;
+      s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, s.settings || {});
+      s.final = s.final || null;
+      return s;
+    } catch (e) { return null; }
+  }
+  function applyState(s) {
+    state = s; ui.importOpen = false; ui.tab = 'players'; saveUi(); save(true); render();
+    toast('Турнир «' + (s.name || 'без названия') + '» открыт');
+  }
+  function fileName() {
+    const d = new Date(), pad = (x) => String(x).padStart(2, '0');
+    const base = String(state.name || 'Своя игра').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Своя игра';
+    return base + ' ' + d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + '.json';
+  }
+  async function saveFile() {
+    const json = JSON.stringify(state, null, 1);
+    const name = fileName();
+    if (window.claude && typeof window.claude.use === 'function') {
+      // внутри артефакта Claude: скачивание через платформу
+      let dl = null;
+      try { dl = await window.claude.use('downloads'); } catch (e) {}
+      if (dl) {
+        try { await dl.save({ filename: name, data: json }); toast('Файл сохранён'); }
+        catch (e) {
+          if (e && e.code === 'declined') return;
+          if (e && e.code === 'rate_limited') return toast('Подождите пару секунд и попробуйте снова');
+          copy(JSON.stringify(state), 'Скачать файл здесь не получилось — турнир скопирован текстом');
+        }
+        return;
+      }
+      return copy(JSON.stringify(state), 'Скачать файл здесь не получилось — турнир скопирован текстом');
+    }
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast('Файл «' + name + '» сохранён в загрузки');
+  }
+
+  /* ---------- установка как приложение (PWA) ---------- */
+  let installPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; render(); });
+  window.addEventListener('appinstalled', () => { installPrompt = null; render(); toast('Приложение установлено'); });
   /* подсветка строк соперников в таблице */
   function highlightOpps(el) {
     document.querySelectorAll('tr.hl').forEach((tr) => tr.classList.remove('hl'));
@@ -716,7 +774,14 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     if (!a) return;
     const act = a.dataset.act;
     if (act === 'draw') return drawTour();
-    if (act === 'cancel' || act === 'copy-close') { ui.confirm = null; ui.copyText = null; return render(); }
+    if (act === 'cancel' || act === 'copy-close') { ui.confirm = null; ui.copyText = null; ui.pending = null; return render(); }
+    if (act === 'save-file') return saveFile();
+    if (act === 'open-do') { applyState(ui.pending); ui.pending = null; return; }
+    if (act === 'install' && installPrompt) {
+      installPrompt.prompt();
+      installPrompt.userChoice.finally(() => { installPrompt = null; render(); });
+      return;
+    }
     if (act === 'new-ask') { ui.confirm = 'new'; render(); return window.scrollTo({ top: 0 }); }
     if (act === 'new-do') { state = emptyState(); ui.confirm = null; ui.tab = 'players'; saveUi(); save(true); return render(); }
     if (act === 'undo-ask') { ui.confirm = 'undo'; return render(); }
@@ -745,12 +810,9 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     }
     if (act === 'export') return copy(JSON.stringify(state), 'Резервная копия скопирована');
     if (act === 'import-do') {
-      try {
-        const s = JSON.parse(document.getElementById('importtxt').value);
-        if (!s || !Array.isArray(s.players) || !Array.isArray(s.tours)) throw new Error();
-        s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, s.settings || {});
-        state = s; ui.importOpen = false; saveUi(); save(true); render(); toast('Турнир восстановлен');
-      } catch (err) { toast('Это не похоже на копию турнира. Проверьте, что текст скопирован целиком.'); }
+      const s = parseTournament(document.getElementById('importtxt').value);
+      if (!s) return toast('Это не похоже на копию турнира. Проверьте, что текст скопирован целиком.');
+      ui.pending = s; render(); window.scrollTo({ top: 0 });
     }
   });
 
