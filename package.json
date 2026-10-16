@@ -1,0 +1,10 @@
+{
+  "name": "svoyak-zherebyevka",
+  "version": "1.0.0",
+  "description": "Жеребьёвка «Своей игры» по швейцарской системе: бои по 3–4 игрока, 4 тура без повторных встреч",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "test": "node test/simulate.js"
+  }
+}

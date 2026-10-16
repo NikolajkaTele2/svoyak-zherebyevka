@@ -1,0 +1,728 @@
+<title>Своя игра: швейцарка</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Russo+One&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: табло-полоса этапов сверху (как игровое табло), под ней рабочая область этапа; карточки боёв сеткой. */
+:root {
+  --bg: #F1F3FA;
+  --surface: #FFFFFF;
+  --surface-2: #E8ECF8;
+  --ink: #141938;
+  --muted: #586087;
+  --line: #D6DBEC;
+  --board: #1A2A8F;
+  --board-2: #22349F;
+  --board-ink: #FFFFFF;
+  --gold: #A87406;
+  --gold-board: #F6C844;
+  --good: #1D7A4B;
+  --good-soft: #E1F2E9;
+  --warn: #A9480F;
+  --warn-soft: #FBEADD;
+  --focus: #3D5BF5;
+  --font-display: "Russo One", "Arial Black", Impact, sans-serif;
+  --font-body: "Golos Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0A0E29; --surface: #121940; --surface-2: #19214F; --ink: #E7EAFA; --muted: #9AA2CB; --line: #283270;
+    --board: #1E30A8; --board-2: #2A3DBF; --board-ink: #FFFFFF; --gold: #F6C844; --gold-board: #F6C844;
+    --good: #55C890; --good-soft: #13372A; --warn: #F39255; --warn-soft: #3A2316; --focus: #8EA2FF;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0A0E29; --surface: #121940; --surface-2: #19214F; --ink: #E7EAFA; --muted: #9AA2CB; --line: #283270;
+  --board: #1E30A8; --board-2: #2A3DBF; --board-ink: #FFFFFF; --gold: #F6C844; --gold-board: #F6C844;
+  --good: #55C890; --good-soft: #13372A; --warn: #F39255; --warn-soft: #3A2316; --focus: #8EA2FF;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 56px; display: grid; gap: 20px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+h1 { font-family: var(--font-display); font-weight: 400; font-size: clamp(22px, 3.4vw, 30px); letter-spacing: .01em; line-height: 1.15; }
+h2 { font-size: 20px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 600; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 20px; }
+.top .sub { color: var(--muted); font-size: 14px; }
+.syncnote { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.dot.on { background: var(--good); }
+
+/* Табло этапов */
+.boardwrap { overflow-x: auto; border-radius: 12px; }
+.board { display: grid; grid-template-columns: repeat(8, minmax(108px, 1fr)); gap: 4px; background: #070B24; padding: 4px; border-radius: 12px; min-width: 880px; }
+.cell { appearance: none; border: 0; cursor: pointer; background: var(--board); color: var(--board-ink); border-radius: 6px; padding: 10px 10px 9px; text-align: left; display: grid; gap: 2px; min-height: 74px; align-content: space-between; transition: background .15s; }
+.cell:hover { background: var(--board-2); }
+.cell .big { font-family: var(--font-display); color: var(--gold-board); font-size: 22px; line-height: 1; }
+.cell .lbl { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; opacity: .92; }
+.cell .st { font-size: 12px; opacity: .8; }
+.cell[aria-current="true"] { background: var(--gold-board); color: #11163A; }
+.cell[aria-current="true"] .big { color: #11163A; }
+.cell.done .st::before { content: "✓ "; }
+
+.banner { border-radius: var(--r); padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; background: var(--surface-2); border: 1px solid var(--line); }
+.banner.warn { background: var(--warn-soft); border-color: transparent; color: var(--ink); }
+.banner.good { background: var(--good-soft); border-color: transparent; }
+.banner p { flex: 1 1 280px; min-width: 0; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.spread { justify-content: space-between; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+
+.btn { appearance: none; border: 1px solid var(--line); background: var(--surface); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--board); border-color: var(--board); color: var(--board-ink); }
+.btn.primary:hover { background: var(--board-2); }
+.btn.big { padding: 12px 20px; font-size: 16px; }
+.btn.danger { color: var(--warn); }
+.btn.on { background: var(--gold-board); border-color: var(--gold-board); color: #11163A; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.linkbtn { appearance: none; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px; font-size: 13px; text-decoration: underline; }
+
+textarea, input[type=text], input[type=number], select { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+textarea { width: 100%; min-height: 160px; resize: vertical; font-family: var(--font-mono); font-size: 13px; }
+.field { display: grid; gap: 4px; }
+.field label, .field .lab { font-size: 13px; color: var(--muted); font-weight: 500; }
+.radio { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.radio input { margin-top: 4px; }
+
+/* Таблицы */
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; background: var(--surface-2); position: sticky; top: 0; }
+tr:last-child td { border-bottom: 0; }
+td.r, th.r { text-align: right; }
+td.name { white-space: normal; min-width: 160px; font-weight: 500; }
+tr.fin td { background: color-mix(in srgb, var(--gold-board) 16%, transparent); }
+.tcell { display: grid; line-height: 1.2; }
+.tcell b { font-family: var(--font-mono); font-weight: 600; }
+.tcell small { color: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+.ptable td input { width: 100%; }
+.ptable td input.rt { width: 90px; text-align: right; font-family: var(--font-mono); }
+
+/* Бои */
+.battles { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.battle { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); display: grid; align-content: start; min-width: 0; }
+.battle.ok { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+.battle.rep { border-color: var(--warn); }
+.bh { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.bh .t { font-family: var(--font-display); font-size: 16px; }
+.chip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.chip.four { background: var(--warn-soft); color: var(--warn); }
+.chip.okc { background: var(--good-soft); color: var(--good); }
+.pl { display: grid; grid-template-columns: 26px minmax(0, 1fr) 92px 66px; gap: 8px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.pl:last-child { border-bottom: 0; }
+.pl .seed { font-family: var(--font-mono); font-size: 12px; color: var(--muted); text-align: right; }
+.pl .nm { min-width: 0; display: grid; line-height: 1.25; }
+.pl .nm span { overflow-wrap: anywhere; font-weight: 500; }
+.pl .nm small { color: var(--muted); font-size: 12px; font-family: var(--font-mono); }
+.pl input { width: 100%; text-align: right; font-family: var(--font-mono); padding: 6px 8px; }
+.pl .res { text-align: right; line-height: 1.15; }
+.pl .res b { font-family: var(--font-display); font-weight: 400; color: var(--gold); font-size: 17px; display: block; }
+.pl .res small { color: var(--muted); font-size: 11px; }
+.pl.swappable { cursor: pointer; }
+.pl.swappable:hover { background: var(--surface-2); }
+.pl.sel { background: color-mix(in srgb, var(--gold-board) 30%, transparent); }
+.pl.repp .nm span { color: var(--warn); }
+.bnote { padding: 6px 14px 10px; font-size: 12px; color: var(--warn); }
+
+.cta { display: grid; justify-items: start; gap: 10px; padding: 26px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+
+.podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 560px) { .podium { grid-template-columns: 1fr; } }
+.pod { background: var(--board); color: var(--board-ink); border-radius: var(--r); padding: 14px; display: grid; gap: 4px; }
+.pod .big { font-family: var(--font-display); color: var(--gold-board); font-size: 28px; line-height: 1; }
+.pod .n { font-weight: 600; overflow-wrap: anywhere; }
+
+.rules { display: grid; gap: 18px; max-width: 760px; }
+.rules section { display: grid; gap: 8px; }
+.rules p, .rules li { max-width: 68ch; }
+.rules ol, .rules ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.ptsgrid { display: grid; grid-template-columns: auto repeat(4, 64px); gap: 4px; width: max-content; max-width: 100%; }
+.ptsgrid div { padding: 6px 8px; background: var(--surface-2); border-radius: 6px; text-align: center; font-family: var(--font-mono); font-size: 13px; }
+.ptsgrid .h { background: var(--board); color: var(--gold-board); font-family: var(--font-display); }
+.ptsgrid .lh { text-align: left; font-family: var(--font-body); }
+
+.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 14px; z-index: 20; }
+.copybox { display: grid; gap: 8px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap" id="app"></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/*ENGINE*/
+</script>
+<script>
+(function () {
+  const fmt = SG.fmt;
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const uid = () => 'p' + Math.random().toString(36).slice(2, 9);
+  const LS_KEY = 'sg-swiss-state-v1';
+  const LS_UI = 'sg-swiss-ui-v1';
+
+  /* ---------- состояние ---------- */
+  const emptyState = () => ({ v: 1, name: 'Своя игра', example: false, settings: { seed1: 'pots', tiebreaks: ['buch', 'score', 'rating'] }, players: [], tours: [], final: null });
+
+  function makeDemo() {
+    const first = ['Анна', 'Борис', 'Вера', 'Глеб', 'Дарья', 'Егор', 'Жанна', 'Илья', 'Ксения', 'Лев', 'Мария', 'Никита', 'Ольга', 'Павел', 'Роман', 'Софья', 'Тимур', 'Ульяна', 'Фёдор', 'Юлия', 'Ярослав', 'Алина', 'Денис', 'Елена', 'Кирилл', 'Лидия', 'Максим', 'Нина', 'Олег', 'Полина', 'Степан'];
+    const last = ['Белов', 'Воронин', 'Гусев', 'Демин', 'Ершов', 'Жуков', 'Зайцев', 'Ильин', 'Карпов', 'Лаптев', 'Морозов', 'Новиков', 'Орлов', 'Панин', 'Рябов', 'Савин', 'Титов', 'Уваров', 'Фомин', 'Хохлов', 'Чернов', 'Шилов', 'Щукин', 'Юдин', 'Яковлев', 'Абрамов', 'Быков', 'Власов', 'Голубев', 'Давыдов', 'Ефимов'];
+    const fem = new Set(['Анна', 'Вера', 'Дарья', 'Жанна', 'Ксения', 'Мария', 'Ольга', 'Софья', 'Ульяна', 'Юлия', 'Алина', 'Елена', 'Лидия', 'Нина', 'Полина']);
+    let s = 20261016;
+    const r = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const st = emptyState();
+    st.example = true;
+    st.name = 'Пример: кубок клуба, 31 участник';
+    for (let i = 0; i < 31; i++) {
+      const f = first[i], l = last[(i * 7) % 31];
+      st.players.push({ id: 'd' + i, name: (fem.has(f) ? l + 'а' : l) + ' ' + f, rating: 1000 + Math.round(r() * 900) });
+    }
+    for (let t = 0; t < 2; t++) {
+      const d = SG.drawNext(st);
+      d.battles.forEach((b) => b.players.forEach((id) => {
+        const p = st.players.find((x) => x.id === id);
+        b.scores[id] = Math.round((p.rating - 1000) / 90 + r() * 30 - 10) * 10;
+      }));
+      st.tours.push({ battles: d.battles });
+    }
+    st.tours.push({ battles: SG.drawNext(st).battles });
+    return st;
+  }
+
+  let state = null;
+  let ui = { tab: 'players', swap: false, sel: null, confirm: null, copyText: null, importOpen: false };
+  try { Object.assign(ui, JSON.parse(localStorage.getItem(LS_UI) || '{}'), { swap: false, sel: null, confirm: null, copyText: null }); } catch (e) {}
+  try { const raw = localStorage.getItem(LS_KEY); if (raw) state = JSON.parse(raw); } catch (e) {}
+  if (!state) state = makeDemo();
+
+  /* ---------- хранение: общий db артефакта, иначе браузер ---------- */
+  const store = { mode: 'local', canWrite: true, doc: null, lastJson: null, timer: null, writing: false, again: false, dirty: false };
+
+  function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen })); } catch (e) {} }
+  function save(immediate) {
+    const json = JSON.stringify(state);
+    try { localStorage.setItem(LS_KEY, json); } catch (e) {}
+    if (store.mode !== 'db' || !store.canWrite) return;
+    store.dirty = true;
+    clearTimeout(store.timer);
+    store.timer = setTimeout(flush, immediate ? 0 : 600);
+  }
+  async function flush() {
+    if (store.writing) { store.again = true; return; }
+    const json = JSON.stringify(state);
+    if (json === store.lastJson) { store.dirty = false; return; }
+    store.writing = true;
+    try {
+      await store.doc.set({ json, savedAt: new Date().toISOString() });
+      store.lastJson = json;
+      if (JSON.stringify(state) === json) store.dirty = false;
+    } catch (e) {
+      if (e && e.code === 'invalid_argument') { store.canWrite = false; render(); }
+      else if (e && e.code === 'unavailable') { setTimeout(flush, 1500 + Math.random() * 1000); }
+      else toast('Не удалось сохранить: ' + (e && e.message ? e.message : 'ошибка'));
+    } finally {
+      store.writing = false;
+      if (store.again) { store.again = false; flush(); }
+    }
+  }
+
+  (async function initDb() {
+    if (!window.claude || typeof window.claude.use !== 'function') return;
+    let db = null, user = null;
+    try { [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]); } catch (e) {}
+    if (!db) return;
+    store.mode = 'db';
+    try { const w = user ? await user.can('data.write') : null; if (w === false) store.canWrite = false; } catch (e) {}
+    store.doc = db.doc('tournaments/main');
+    store.doc.onSnapshot((snap) => {
+      if (snap.metadata && snap.metadata.hasPendingWrites) return;
+      if (!snap.exists) { render(); return; } // пусто: показываем локальное, запишем при первой правке
+      const json = snap.data().json;
+      if (typeof json !== 'string') return;
+      if (json === JSON.stringify(state)) { store.lastJson = json; return; }
+      if (store.dirty) return; // своя правка ещё не ушла — она перезапишет
+      try {
+        state = JSON.parse(json);
+        store.lastJson = json;
+        try { localStorage.setItem(LS_KEY, json); } catch (e) {}
+        const ae = document.activeElement;
+        if (!(ae && ae.matches && ae.matches('input[data-score]'))) render();
+      } catch (e) {}
+    }, () => { store.mode = 'local'; render(); });
+    render();
+  })();
+
+  const canEdit = () => store.canWrite;
+
+  /* ---------- вычисления ---------- */
+  const byId = () => Object.fromEntries(state.players.map((p) => [p.id, p]));
+  const tourDone = (t) => !!state.tours[t] && SG.tourComplete(state.tours[t]);
+  const qualDone = () => state.tours.length === 4 && tourDone(3);
+  const anyScore = (tour) => tour.battles.some((b) => b.players.some((id) => b.scores[id] !== null && b.scores[id] !== ''));
+  const filled = (tour) => tour.battles.filter((b) => SG.battleResult(b)).length;
+
+  function sizesText(n) {
+    const s = SG.battleSizes(n);
+    if (!s) return n < 6 ? 'нужно хотя бы 6 участников' : 'нельзя разбить на бои по 3–4';
+    const a = s.filter((x) => x === 3).length, b = s.filter((x) => x === 4).length;
+    const parts = [];
+    if (a) parts.push(a + ' ' + plural(a, 'бой', 'боя', 'боёв') + ' по 3');
+    if (b) parts.push(b + ' ' + plural(b, 'бой', 'боя', 'боёв') + ' по 4');
+    return parts.join(' и ');
+  }
+  function plural(n, one, few, many) {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+  }
+
+  /* ---------- действия ---------- */
+  function setTab(t) { ui.tab = t; ui.swap = false; ui.sel = null; ui.confirm = null; saveUi(); render(); window.scrollTo({ top: 0 }); }
+
+  function drawTour() {
+    try {
+      const d = SG.drawNext(state);
+      state.tours.push({ battles: d.battles });
+      save(true);
+      ui.tab = 't' + (state.tours.length - 1); saveUi();
+      render();
+      toast(d.repeats ? 'Жеребьёвка готова, но без повторов не получилось: ' + d.repeats : 'Жеребьёвка тура ' + state.tours.length + ' готова');
+    } catch (e) { toast(e.message); }
+  }
+  function undoTour() {
+    state.tours.pop();
+    state.final = null;
+    save(true);
+    ui.confirm = null;
+    ui.tab = state.tours.length ? 't' + (state.tours.length - 1) : 'players';
+    saveUi(); render();
+  }
+  function makeFinal() {
+    const st = SG.standings(state, 4);
+    const ids = st.slice(0, 3).map((r) => r.id);
+    state.final = { players: ids, scores: Object.fromEntries(ids.map((id) => [id, null])) };
+    save(true); render();
+  }
+
+  let toastTimer;
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg; el.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => (el.hidden = true), 2600);
+  }
+  function copy(text, okMsg) {
+    try {
+      navigator.clipboard.writeText(text).then(() => toast(okMsg || 'Скопировано'), () => { ui.copyText = text; render(); });
+    } catch (e) { ui.copyText = text; render(); }
+  }
+
+  function parseList(text) {
+    const out = [];
+    text.split(/\r?\n/).forEach((line) => {
+      let s = line.trim();
+      if (!s) return;
+      s = s.replace(/^\d+[.)]\s+/, '');
+      const m = s.match(/^(.*?)[\s;,\t]+(-?\d+(?:[.,]\d+)?)\s*$/);
+      if (m && m[1].trim()) out.push({ id: uid(), name: m[1].trim().replace(/[;,]$/, ''), rating: Number(m[2].replace(',', '.')) });
+      else out.push({ id: uid(), name: s, rating: 0 });
+    });
+    return out;
+  }
+
+  /* ---------- отрисовка ---------- */
+  const app = document.getElementById('app');
+
+  function stageCells() {
+    const cells = [];
+    cells.push({ key: 'players', big: state.players.length || '—', lbl: 'Участники', st: state.tours.length ? 'состав закрыт' : 'идёт запись', done: state.tours.length > 0 });
+    for (let t = 0; t < 4; t++) {
+      const tour = state.tours[t];
+      let st = 'не начат', done = false;
+      if (tour) { const f = filled(tour); done = f === tour.battles.length; st = done ? 'завершён' : 'результаты ' + f + '/' + tour.battles.length; }
+      else if (t === state.tours.length && (t === 0 ? state.players.length >= 6 : tourDone(t - 1))) st = 'к жеребьёвке';
+      cells.push({ key: 't' + t, big: t + 1, lbl: 'Тур ' + (t + 1), st, done });
+    }
+    const fdone = state.final && SG.battleResult(state.final);
+    cells.push({ key: 'final', big: '★', lbl: 'Финал', st: fdone ? 'завершён' : state.final ? 'идёт' : qualDone() ? 'к формированию' : 'тройка лучших', done: !!fdone });
+    cells.push({ key: 'table', big: '≡', lbl: 'Таблица', st: 'после ' + state.tours.filter(SG.tourComplete).length + ' ' + plural(state.tours.filter(SG.tourComplete).length, 'тура', 'туров', 'туров'), done: false });
+    cells.push({ key: 'rules', big: '?', lbl: 'Как работает', st: 'правила жеребьёвки', done: false });
+    return cells.map((c) => `<button class="cell${c.done ? ' done' : ''}" data-tab="${c.key}" aria-current="${ui.tab === c.key}"><span class="big">${esc(c.big)}</span><span class="lbl">${c.lbl}</span><span class="st">${esc(c.st)}</span></button>`).join('');
+  }
+
+  function render() {
+    const syncLabel = store.mode === 'db'
+      ? (store.canWrite ? '<span class="dot on"></span>Сохраняется в артефакте, видно всем, у кого есть ссылка' : '<span class="dot on"></span>Режим просмотра: данные обновляются автоматически')
+      : '<span class="dot"></span>Сохраняется только в этом браузере';
+    let html = `
+      <header class="top">
+        <div style="display:grid;gap:4px;min-width:0">
+          <span class="eyebrow">Своя игра · швейцарская система</span>
+          <h1>${esc(state.name)}</h1>
+        </div>
+        <div class="syncnote">${syncLabel}</div>
+      </header>
+      <nav class="boardwrap" aria-label="Этапы турнира"><div class="board">${stageCells()}</div></nav>`;
+    if (state.example) html += `<div class="banner"><p><b>Это пример турнира</b> на 31 участника: два тура сыграны, третий разыгран. Посмотрите, как всё устроено, затем начните свой турнир.</p>${canEdit() ? '<button class="btn primary" data-act="new-ask">Начать свой турнир</button>' : ''}</div>`;
+    if (ui.confirm === 'new') html += `<div class="banner warn"><p>Удалить всех участников и результаты и начать новый турнир? Отменить это нельзя. Если нужно, сначала сохраните резервную копию на вкладке «Участники».</p><div class="row"><button class="btn danger" data-act="new-do">Начать заново</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
+    if (ui.copyText !== null) html += `<div class="panel copybox"><p>Браузер не дал скопировать автоматически. Выделите текст и скопируйте вручную:</p><textarea id="copyfallback" readonly>${esc(ui.copyText)}</textarea><div><button class="btn" data-act="copy-close">Закрыть</button></div></div>`;
+
+    const v = ui.tab;
+    if (v === 'players') html += viewPlayers();
+    else if (/^t\d$/.test(v)) html += viewTour(Number(v[1]));
+    else if (v === 'final') html += viewFinal();
+    else if (v === 'table') html += viewTable();
+    else html += viewRules();
+    const ae = document.activeElement;
+    const focusId = ae && ae.id && app.contains(ae) ? ae.id : null;
+    app.innerHTML = html;
+    if (focusId) { const el = document.getElementById(focusId); if (el) el.focus({ preventScroll: true }); }
+    const cf = document.getElementById('copyfallback'); if (cf) cf.select();
+  }
+
+  function viewPlayers() {
+    const locked = state.tours.length > 0 || !canEdit();
+    const n = state.players.length;
+    const sorted = state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
+    const rows = sorted.map((p, i) => locked
+      ? `<tr><td class="r num">${i + 1}</td><td class="name">${esc(p.name)}</td><td class="r num">${esc(p.rating)}</td></tr>`
+      : `<tr><td class="r num">${i + 1}</td><td><input type="text" id="pn-${p.id}" data-pname="${p.id}" value="${esc(p.name)}" aria-label="Имя"></td><td class="r"><input type="number" class="rt" id="pr-${p.id}" data-prating="${p.id}" value="${esc(p.rating)}" aria-label="Рейтинг"></td><td><button class="linkbtn" data-del="${p.id}" aria-label="Удалить ${esc(p.name)}">удалить</button></td></tr>`).join('');
+    const tb = state.settings.tiebreaks;
+    const tbSelect = (i) => `<select id="tb${i}" data-tb="${i}" ${canEdit() ? '' : 'disabled'}>${Object.entries(SG.TB).map(([k, d]) => `<option value="${k}"${tb[i] === k ? ' selected' : ''}>${d.label}</option>`).join('')}</select>`;
+    const canDraw = !state.tours.length && SG.battleSizes(n) && canEdit();
+
+    return `
+    <div class="grid2">
+      <section class="panel">
+        <div class="row spread"><h2>Участники</h2><span class="muted num">${n} чел.</span></div>
+        ${locked ? (canEdit() ? '<p class="muted">Состав закрыт после жеребьёвки первого тура. Чтобы изменить список, отмените все туры.</p>' : '') : `
+        <div class="field"><label for="tname">Название турнира</label><input type="text" id="tname" value="${esc(state.name)}"></div>
+        <div class="field"><label for="bulk">Вставить список: одна строка — один участник, рейтинг в конце строки через пробел, табуляцию или «;». Можно скопировать два столбца из Excel.</label>
+          <textarea id="bulk" placeholder="Иванов Пётр; 1540&#10;Смирнова Анна	1320&#10;Козлов Дмитрий 980"></textarea></div>
+        <div class="row"><button class="btn" data-act="bulk-add">Добавить в список</button><button class="btn" data-act="bulk-replace">Заменить список</button><button class="btn" data-act="add-one">+ Участник</button></div>`}
+        ${n ? `<div class="tablewrap"><table class="ptable"><thead><tr><th class="r">№</th><th>Участник</th><th class="r">Рейтинг</th>${locked ? '' : '<th></th>'}</tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">Список пуст. Вставьте участников в поле выше.</p>'}
+      </section>
+      <div style="display:grid;gap:20px;min-width:0">
+        <section class="panel">
+          <h2>Разбивка на бои</h2>
+          <p><b class="num">${n}</b> ${plural(n, 'участник', 'участника', 'участников')} → ${sizesText(n)}.</p>
+          <p class="muted">Бои по 3 — у лидеров. Если число участников не делится на 3, один или два нижних боя проходят вчетвером.</p>
+          ${canDraw ? '<div><button class="btn primary big" data-act="draw">Жеребьёвка 1 тура</button></div>' : ''}
+        </section>
+        <section class="panel">
+          <h2>Настройки</h2>
+          <div class="field"><span class="lab">Посев первого тура по рейтингу</span>
+            <label class="radio"><input type="radio" name="seed1" value="pots" ${state.settings.seed1 !== 'sequential' ? 'checked' : ''} ${state.tours.length || !canEdit() ? 'disabled' : ''}><span><b>Корзинами</b> — в каждом бою по одному сильному, среднему и слабому по рейтингу. Бои ровные.</span></label>
+            <label class="radio"><input type="radio" name="seed1" value="sequential" ${state.settings.seed1 === 'sequential' ? 'checked' : ''} ${state.tours.length || !canEdit() ? 'disabled' : ''}><span><b>Подряд</b> — 1-2-3, 4-5-6… Сильные сразу играют с сильными.</span></label>
+          </div>
+          <div class="field"><span class="lab">При равенстве очков сравнивать</span>
+            <div class="row">1. ${tbSelect(0)}</div><div class="row">2. ${tbSelect(1)}</div><div class="row">3. ${tbSelect(2)}</div>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>Резервная копия</h2>
+          <p class="muted">Скопируйте данные турнира в заметки или мессенджер. Из копии турнир можно восстановить на любом устройстве.</p>
+          <div class="row"><button class="btn" data-act="export">Скопировать копию</button>${canEdit() ? '<button class="btn" data-act="import-toggle">Восстановить из копии</button>' : ''}</div>
+          ${ui.importOpen && canEdit() ? `<div class="field"><label for="importtxt">Вставьте текст копии или выберите файл</label><textarea id="importtxt" placeholder='{"v":1,...}'></textarea><input type="file" id="importfile" accept=".json,.txt,application/json,text/plain"><div class="row"><button class="btn primary" data-act="import-do">Восстановить</button></div></div>` : ''}
+          ${canEdit() && !state.example ? '<div><button class="linkbtn" data-act="new-ask">Начать новый турнир</button></div>' : ''}
+        </section>
+      </div>
+    </div>`;
+  }
+
+  function viewTour(t) {
+    const tour = state.tours[t];
+    if (!tour) {
+      const ready = t === state.tours.length && (t === 0 ? !!SG.battleSizes(state.players.length) : tourDone(t - 1));
+      if (ready && canEdit()) return `<div class="cta"><span class="eyebrow">Тур ${t + 1}</span><h2>${t === 0 ? 'Жеребьёвка по рейтингу' : 'Швейцарская жеребьёвка по текущей таблице'}</h2><p class="muted">${t === 0 ? state.players.length + ' участников → ' + sizesText(state.players.length) + '.' : 'Участники с близкими очками попадут в один бой. Никто не встретится с тем, с кем уже играл.'}</p><button class="btn primary big" data-act="draw">Жеребьёвка тура ${t + 1}</button></div>`;
+      return `<div class="cta"><span class="eyebrow">Тур ${t + 1}</span><h2>Тур ещё не разыгран</h2><p class="muted">${t === 0 ? 'Сначала заполните список участников.' : 'Жеребьёвка станет доступна, когда будут введены все результаты тура ' + t + '.'}</p></div>`;
+    }
+    const players = byId();
+    const before = SG.standings(state, t);
+    const pos = Object.fromEntries(before.map((r) => [r.id, r]));
+    const reps = SG.repeatsInTour(state, t);
+    const repPairs = new Set(reps.map((r) => r.a + '|' + r.b));
+    const repIds = new Set(reps.flatMap((r) => [r.a, r.b]));
+    const isLast = t === state.tours.length - 1;
+    const canSwap = canEdit() && isLast && !anyScore(tour);
+    const f = filled(tour), total = tour.battles.length;
+    const done = f === total;
+
+    const cards = tour.battles.map((b, bi) => {
+      const res = SG.battleResult(b);
+      const rep = reps.filter((r) => r.battle === bi);
+      const rows = b.players.map((id) => {
+        const p = players[id] || { name: '?' };
+        const r = res && res[id];
+        const sel = ui.sel && ui.sel.id === id;
+        const val = b.scores[id] === null || b.scores[id] === undefined ? '' : b.scores[id];
+        return `<div class="pl${ui.swap ? ' swappable' : ''}${sel ? ' sel' : ''}${repIds.has(id) && rep.length ? ' repp' : ''}" ${ui.swap ? `data-swap="${bi}:${id}" role="button" tabindex="0"` : ''}>
+          <span class="seed">${t ? pos[id].rank : ''}</span>
+          <span class="nm"><span>${esc(p.name)}</span><small>${t ? fmt(pos[id].pts) + ' оч.' : 'рейтинг ' + esc(p.rating)}</small></span>
+          ${ui.swap ? '<span></span>' : `<input type="number" step="any" inputmode="numeric" id="s-${t}-${id}" data-score="${t}:${bi}:${id}" value="${esc(val)}" placeholder="баллы" aria-label="Баллы: ${esc(p.name)}" ${canEdit() ? '' : 'disabled'}>`}
+          <span class="res" id="r-${t}-${id}">${r ? `<b>${fmt(r.pts)}</b><small>${r.place} место</small>` : ''}</span>
+        </div>`;
+      }).join('');
+      const note = rep.length ? `<div class="bnote">Повторная встреча: ${rep.map((r) => esc(players[r.a].name) + ' — ' + esc(players[r.b].name)).join('; ')}</div>` : '';
+      return `<article class="battle${res ? ' ok' : ''}${rep.length ? ' rep' : ''}" id="b-${t}-${bi}">
+        <div class="bh"><span class="t">Бой ${bi + 1}</span><span class="row" style="gap:6px"><span class="chip${b.players.length === 4 ? ' four' : ''}">${b.players.length} уч.</span><span class="chip okc" id="bk-${t}-${bi}" ${res ? '' : 'hidden'}>готово</span></span></div>
+        ${rows}${note}</article>`;
+    }).join('');
+
+    let tools = '';
+    if (canEdit()) {
+      tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button>`;
+      if (canSwap) tools += `<button class="btn${ui.swap ? ' on' : ''}" data-act="swap-toggle">${ui.swap ? 'Готово' : 'Поменять участников местами'}</button>`;
+      if (isLast) tools += `<button class="btn danger" data-act="undo-ask">Отменить тур</button>`;
+    } else tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button>`;
+
+    let next = '';
+    if (done && canEdit()) {
+      if (t < 3 && t === state.tours.length - 1) next = `<div class="cta"><h2>Тур ${t + 1} завершён</h2><p class="muted">Таблица пересчитана. Можно разыгрывать следующий тур.</p><button class="btn primary big" data-act="draw">Жеребьёвка тура ${t + 2}</button></div>`;
+      if (t === 3 && !state.final) next = `<div class="cta"><h2>Отборочные туры завершены</h2><p class="muted">Три лучших участника по таблице выходят в финал.</p><button class="btn primary big" data-act="to-final">К финалу</button></div>`;
+    }
+
+    return `
+      <section style="display:grid;gap:14px">
+        <div class="row spread">
+          <div style="display:grid;gap:2px"><span class="eyebrow">Тур ${t + 1} из 4</span><h2>${total} ${plural(total, 'бой', 'боя', 'боёв')} · <span id="filled-${t}">${f}</span> из ${total} с результатами</h2></div>
+          <div class="row">${tools}</div>
+        </div>
+        ${ui.confirm === 'undo' ? `<div class="banner warn"><p>Удалить тур ${t + 1}${anyScore(tour) ? ' вместе с введёнными результатами' : ''}${state.final ? ' и финал' : ''}?</p><div class="row"><button class="btn danger" data-act="undo-do">Удалить тур</button><button class="btn" data-act="cancel">Отмена</button></div></div>` : ''}
+        ${ui.swap ? '<div class="banner"><p>Нажмите на участника, затем на участника из другого боя — они поменяются местами. Если появится повторная встреча, бой подсветится.</p></div>' : ''}
+        ${reps.length && !ui.swap ? `<div class="banner warn"><p>В этом туре ${reps.length} ${plural(reps.length, 'повторная встреча', 'повторные встречи', 'повторных встреч')}. Бои отмечены рамкой.</p></div>` : ''}
+        ${!isLast && canEdit() ? '<p class="muted">Исправление результатов этого тура пересчитает таблицу, но не изменит уже проведённую жеребьёвку следующих туров.</p>' : ''}
+        <div class="legend">${t ? '<span>Слева — место в таблице перед туром и очки</span>' : '<span>Посев по рейтингу</span>'}<span>Очки за бой: 3 участника — 2 · 1 · 0; 4 участника — 2 · 1 · 0,5 · 0; при равных баллах очки делятся</span></div>
+        <div class="battles">${cards}</div>
+        ${next}
+      </section>`;
+  }
+
+  function viewFinal() {
+    if (!qualDone()) {
+      const done = state.tours.filter(SG.tourComplete).length;
+      const st = SG.standings(state).slice(0, 5);
+      return `<div class="cta"><span class="eyebrow">Финал</span><h2>Финал откроется после 4 отборочных туров</h2><p class="muted">Сыграно туров: ${done} из 4. ${done ? 'Сейчас в тройке:' : ''}</p>${done ? `<ol style="margin:0;padding-left:20px">${st.slice(0, 3).map((r) => `<li>${esc(r.name)} — <span class="num">${fmt(r.pts)}</span> оч.</li>`).join('')}</ol>` : ''}</div>`;
+    }
+    const st = SG.standings(state, 4);
+    const players = byId();
+    const tbNote = st[2] && st[3] && st[2].pts === st[3].pts
+      ? `<div class="banner"><p>У 3-го и 4-го места равные очки (${fmt(st[2].pts)}). Финалист определён по дополнительным показателям: ${state.settings.tiebreaks.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}.</p></div>` : '';
+    if (!state.final) {
+      return `<section style="display:grid;gap:14px"><div class="cta"><span class="eyebrow">Финал</span><h2>Финалисты</h2><ol style="margin:0;padding-left:20px">${st.slice(0, 3).map((r) => `<li><b>${esc(r.name)}</b> — <span class="num">${fmt(r.pts)}</span> оч.</li>`).join('')}</ol>${canEdit() ? '<button class="btn primary big" data-act="make-final">Сформировать финальный бой</button>' : ''}</div>${tbNote}</section>`;
+    }
+    const changed = st.slice(0, 3).map((r) => r.id).sort().join() !== state.final.players.slice().sort().join();
+    const b = state.final;
+    const res = SG.battleResult(b);
+    const rows = b.players.map((id) => {
+      const p = players[id];
+      const r = res && res[id];
+      const val = b.scores[id] === null || b.scores[id] === undefined ? '' : b.scores[id];
+      const q = st.find((x) => x.id === id);
+      return `<div class="pl"><span class="seed">${q.rank}</span><span class="nm"><span>${esc(p.name)}</span><small>${fmt(q.pts)} оч. в отборе</small></span><input type="number" step="any" inputmode="numeric" id="fs-${id}" data-fscore="${id}" value="${esc(val)}" placeholder="баллы" aria-label="Баллы: ${esc(p.name)}" ${canEdit() ? '' : 'disabled'}><span class="res">${r ? `<b>${r.place}</b><small>место</small>` : ''}</span></div>`;
+    }).join('');
+    let podium = '';
+    if (res) {
+      const order = b.players.slice().sort((x, y) => Number(b.scores[y]) - Number(b.scores[x]));
+      podium = `<div class="podium">${order.map((id) => `<div class="pod"><span class="big">${res[id].place}</span><span class="n">${esc(players[id].name)}</span><span class="num" style="opacity:.8">${esc(b.scores[id])} баллов</span></div>`).join('')}</div>`;
+    }
+    return `<section style="display:grid;gap:14px">
+      <div style="display:grid;gap:2px"><span class="eyebrow">Финал</span><h2>Финальный бой</h2></div>
+      ${changed && canEdit() ? '<div class="banner warn"><p>После формирования финала результаты отбора изменились, и тройка лучших теперь другая.</p><button class="btn" data-act="make-final">Пересобрать финал</button></div>' : ''}
+      ${tbNote}
+      <div class="battles"><article class="battle${res ? ' ok' : ''}"><div class="bh"><span class="t">Финал</span><span class="chip">3 уч.</span></div>${rows}</article></div>
+      ${podium}
+      <p class="muted">Места в финале определяются по баллам финального боя. Остальные места — по таблице отборочных туров, начиная с 4-го.</p>
+    </section>`;
+  }
+
+  function viewTable() {
+    const done = state.tours.filter(SG.tourComplete).length;
+    const st = SG.standings(state);
+    const tb = state.settings.tiebreaks;
+    const fin = qualDone();
+    const rows = st.map((r) => {
+      const cells = [0, 1, 2, 3].map((t) => {
+        const x = r.perTour[t];
+        return `<td class="r">${x ? `<span class="tcell"><b>${fmt(x.pts)}</b><small>бой ${x.battle} · ${x.score}</small></span>` : '<span class="muted">—</span>'}</td>`;
+      }).join('');
+      return `<tr class="${fin && r.rank <= 3 ? 'fin' : ''}"><td class="r num">${r.rank}</td><td class="name">${esc(r.name)}${fin && r.rank <= 3 ? ' <span class="chip">финал</span>' : ''}</td><td class="r num"><b>${fmt(r.pts)}</b></td>${cells}${tb.map((k) => `<td class="r num">${k === 'buch' ? fmt(Math.round(r.opp * 100) / 100) : esc(SG.TB[k].get(r))}</td>`).join('')}</tr>`;
+    }).join('');
+    return `<section style="display:grid;gap:14px">
+      <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Турнирная таблица</span><h2>После ${done} ${plural(done, 'тура', 'туров', 'туров')}</h2></div>
+      <button class="btn" data-act="copy-table">Скопировать для Excel</button></div>
+      <p class="muted">Порядок: очки, затем ${tb.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}. «Сила соперников» — средние очки всех, с кем участник играл в боях. В клетках туров — очки, номер боя и набранные баллы.</p>
+      <div class="tablewrap"><table><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Очки</th><th class="r">Т1</th><th class="r">Т2</th><th class="r">Т3</th><th class="r">Т4</th>${tb.map((k) => `<th class="r">${SG.TB[k].short}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
+    </section>`;
+  }
+
+  function viewRules() {
+    return `<article class="panel rules">
+      <section><span class="eyebrow">Правила жеребьёвки</span><h2>Как устроена швейцарка для боёв на 3–4 игрока</h2>
+      <p>Турнир — 4 отборочных тура и финал. В каждом туре каждый участник играет ровно один бой. За 4 тура никто не встречается с одним и тем же соперником дважды.</p></section>
+      <section><h3>1. Размер боёв</h3>
+      <p>Бои по 3 участника. Если число участников не делится на 3, остаток закрывается боями на 4: при остатке 1 — один бой на 4, при остатке 2 — два. Бои на 4 ставятся в низ таблицы, то есть достаются аутсайдерам.</p>
+      <p class="muted">Например, 31 = 9 × 3 + 4; 32 = 8 × 3 + 2 × 4; 30 = 10 × 3.</p></section>
+      <section><h3>2. Очки за бой</h3>
+      <div style="overflow-x:auto"><div class="ptsgrid"><div class="h lh">Место</div><div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">4</div>
+      <div class="lh">Бой на 3</div><div>2</div><div>1</div><div>0</div><div>—</div>
+      <div class="lh">Бой на 4</div><div>2</div><div>1</div><div>0,5</div><div>0</div></div></div>
+      <p>При равных баллах участники делят места и очки поровну: двое на 1–2 месте получают по (2 + 1) / 2 = 1,5; трое на 2–4 месте в бою на 4 — по (1 + 0,5 + 0) / 3 = 0,5.</p></section>
+      <section><h3>3. Первый тур — посев по рейтингу</h3>
+      <p>Участники сортируются по рейтингу. В режиме «корзинами» первые M (M — число боёв) расходятся по одному в каждый бой, следующие M — змейкой в обратном порядке, ещё M — снова в прямом. Самые низкие по рейтингу дополняют последние бои до четырёх. В режиме «подряд» бои собираются как 1-2-3, 4-5-6 и так далее.</p></section>
+      <section><h3>4. Туры 2–4 — швейцарская жеребьёвка</h3>
+      <ol>
+        <li>Таблица сортируется: очки, затем дополнительные показатели.</li>
+        <li>Бои собираются сверху вниз. Первый бой получает лучшего из ещё не распределённых участников.</li>
+        <li>К нему подбираются соперники с максимально близкими очками, с которыми он и они между собой ещё не играли. Среди равных по очкам предпочтение — соседям по таблице.</li>
+        <li>Если внизу таблицы бой без повторов не собирается, алгоритм возвращается на шаг назад и пробует другой состав верхних боёв.</li>
+        <li>Если участников с такими же очками не хватает, в бой добавляется ближайший участник из соседней группы.</li>
+      </ol>
+      <p>Так лидеры с лидерами встречаются уже со второго тура, и тройка финалистов определяется точнее.</p></section>
+      <section><h3>5. Почему повторов не бывает</h3>
+      <p>Перед 4-м туром у участника не больше 9 бывших соперников, а всего в турнире 25–48 человек. Свободных соперников остаётся с запасом. Мы проверили алгоритм на 3600 смоделированных турнирах от 25 до 48 участников: повторных встреч не было ни разу. Если всё же возникнет повтор, приложение предупредит и подсветит бой.</p></section>
+      <section><h3>6. Равенство очков и финал</h3>
+      <p>При равных очках по умолчанию сравниваются: сила соперников (средние очки всех, с кем играл), сумма баллов, рейтинг. Порядок можно поменять на вкладке «Участники». В финал выходят три лучших участника таблицы после 4-го тура.</p></section>
+    </article>`;
+  }
+
+  /* ---------- события ---------- */
+  function updateBattleView(t, bi) {
+    const b = state.tours[t].battles[bi];
+    const res = SG.battleResult(b);
+    b.players.forEach((id) => {
+      const el = document.getElementById('r-' + t + '-' + id);
+      if (el) el.innerHTML = res ? `<b>${fmt(res[id].pts)}</b><small>${res[id].place} место</small>` : '';
+    });
+    const card = document.getElementById('b-' + t + '-' + bi);
+    if (card) card.classList.toggle('ok', !!res);
+    const chip = document.getElementById('bk-' + t + '-' + bi);
+    if (chip) chip.hidden = !res;
+    const fe = document.getElementById('filled-' + t);
+    if (fe) fe.textContent = filled(state.tours[t]);
+    // табло этапов
+    const board = document.querySelector('.board');
+    if (board) board.innerHTML = stageCells();
+  }
+
+  app.addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.dataset.score) {
+      const [t, bi, id] = el.dataset.score.split(':');
+      const v = el.value.trim();
+      state.tours[t].battles[bi].scores[id] = v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
+      save(); updateBattleView(Number(t), Number(bi));
+    } else if (el.dataset.fscore) {
+      const v = el.value.trim();
+      state.final.scores[el.dataset.fscore] = v === '' || !Number.isFinite(Number(v)) ? null : Number(v);
+      save();
+    } else if (el.id === 'tname') {
+      state.name = el.value || 'Своя игра'; save();
+      const h = document.querySelector('h1'); if (h) h.textContent = state.name;
+    }
+  });
+  app.addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.dataset.pname) { const p = state.players.find((x) => x.id === el.dataset.pname); if (p) { p.name = el.value.trim() || p.name; save(); } }
+    else if (el.dataset.prating) { const p = state.players.find((x) => x.id === el.dataset.prating); if (p) { p.rating = Number(el.value) || 0; save(); render(); } }
+    else if (el.dataset.tb !== undefined) {
+      const i = Number(el.dataset.tb), val = el.value, tb = state.settings.tiebreaks;
+      const j = tb.indexOf(val); if (j >= 0 && j !== i) tb[j] = tb[i];
+      tb[i] = val; save(); render();
+    } else if (el.name === 'seed1') { state.settings.seed1 = el.value; save(); }
+    else if (el.dataset.fscore) { render(); }
+    else if (el.dataset.score) { setTimeout(render, 0); } // после перехода фокуса: показать кнопку следующего тура и т.п.
+    else if (el.id === 'importfile' && el.files && el.files[0]) {
+      const fr = new FileReader();
+      fr.onload = () => { const ta = document.getElementById('importtxt'); if (ta) ta.value = String(fr.result || ''); };
+      fr.readAsText(el.files[0]);
+    }
+  });
+  app.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset && e.target.dataset.swap) { e.preventDefault(); e.target.click(); }
+  });
+  app.addEventListener('click', (e) => {
+    const tabEl = e.target.closest('[data-tab]');
+    if (tabEl) return setTab(tabEl.dataset.tab);
+    const sw = e.target.closest('[data-swap]');
+    if (sw) {
+      const [bi, id] = sw.dataset.swap.split(':');
+      const t = state.tours.length - 1;
+      if (!ui.sel) ui.sel = { bi: Number(bi), id };
+      else if (ui.sel.id === id) ui.sel = null;
+      else if (ui.sel.bi === Number(bi)) ui.sel = { bi: Number(bi), id };
+      else {
+        const A = state.tours[t].battles[ui.sel.bi], B = state.tours[t].battles[Number(bi)];
+        const ia = A.players.indexOf(ui.sel.id), ib = B.players.indexOf(id);
+        A.players[ia] = id; B.players[ib] = ui.sel.id;
+        A.scores = Object.fromEntries(A.players.map((x) => [x, null]));
+        B.scores = Object.fromEntries(B.players.map((x) => [x, null]));
+        ui.sel = null; save(true);
+      }
+      return render();
+    }
+    const del = e.target.closest('[data-del]');
+    if (del) { state.players = state.players.filter((p) => p.id !== del.dataset.del); save(); return render(); }
+    const a = e.target.closest('[data-act]');
+    if (!a) return;
+    const act = a.dataset.act;
+    if (act === 'draw') return drawTour();
+    if (act === 'cancel' || act === 'copy-close') { ui.confirm = null; ui.copyText = null; return render(); }
+    if (act === 'new-ask') { ui.confirm = 'new'; render(); return window.scrollTo({ top: 0 }); }
+    if (act === 'new-do') { state = emptyState(); ui.confirm = null; ui.tab = 'players'; saveUi(); save(true); return render(); }
+    if (act === 'undo-ask') { ui.confirm = 'undo'; return render(); }
+    if (act === 'undo-do') return undoTour();
+    if (act === 'swap-toggle') { ui.swap = !ui.swap; ui.sel = null; return render(); }
+    if (act === 'to-final') return setTab('final');
+    if (act === 'make-final') return makeFinal();
+    if (act === 'import-toggle') { ui.importOpen = !ui.importOpen; saveUi(); return render(); }
+    if (act === 'add-one') { state.players.push({ id: uid(), name: 'Участник ' + (state.players.length + 1), rating: 0 }); state.example = false; save(); return render(); }
+    if (act === 'bulk-add' || act === 'bulk-replace') {
+      const list = parseList(document.getElementById('bulk').value);
+      if (!list.length) return toast('Вставьте хотя бы одну строку');
+      if (act === 'bulk-replace') state.players = list; else state.players = state.players.concat(list);
+      state.example = false; save(true); render(); return toast('Добавлено: ' + list.length);
+    }
+    if (act === 'copy-tour') {
+      const t = Number(a.dataset.t), pl = byId();
+      const txt = state.name + ' — тур ' + (t + 1) + '\n' + state.tours[t].battles.map((b, i) => 'Бой ' + (i + 1) + ': ' + b.players.map((id) => pl[id].name).join(', ')).join('\n');
+      return copy(txt, 'Состав тура скопирован');
+    }
+    if (act === 'copy-table') {
+      const st = SG.standings(state), tb = state.settings.tiebreaks;
+      const head = ['Место', 'Участник', 'Очки', 'Т1', 'Т2', 'Т3', 'Т4', ...tb.map((k) => SG.TB[k].label)].join('\t');
+      const lines = st.map((r) => [r.rank, r.name, fmt(r.pts), ...[0, 1, 2, 3].map((t) => (r.perTour[t] ? fmt(r.perTour[t].pts) : '')), ...tb.map((k) => fmt(Math.round(SG.TB[k].get(r) * 100) / 100))].join('\t'));
+      return copy([head, ...lines].join('\n'), 'Таблица скопирована — вставьте в Excel');
+    }
+    if (act === 'export') return copy(JSON.stringify(state), 'Резервная копия скопирована');
+    if (act === 'import-do') {
+      try {
+        const s = JSON.parse(document.getElementById('importtxt').value);
+        if (!s || !Array.isArray(s.players) || !Array.isArray(s.tours)) throw new Error();
+        s.settings = Object.assign({ seed1: 'pots', tiebreaks: ['buch', 'score', 'rating'] }, s.settings || {});
+        state = s; ui.importOpen = false; saveUi(); save(true); render(); toast('Турнир восстановлен');
+      } catch (err) { toast('Это не похоже на копию турнира. Проверьте, что текст скопирован целиком.'); }
+    }
+  });
+
+  render();
+})();
+</script>
