@@ -5,14 +5,20 @@ const SG = (() => {
 
   const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
 
-  /* Размеры боёв: максимум по 3, бои по 4 — только чтобы закрыть остаток (b = N mod 3). */
-  function battleSizes(n) {
+  /* Размеры боёв: максимум по 3, бои по 4 — только чтобы закрыть остаток (b = N mod 3).
+     even = true: если боёв нечётное число, 4 боя по 3 заменяются на 3 боя по 4 (боёв становится на один меньше). */
+  function battleSizes(n, even) {
     if (n === 3 || n === 4) return [n];
-    const b = n % 3;
-    const a = (n - 4 * b) / 3;
+    let b = n % 3;
+    let a = (n - 4 * b) / 3;
     if (n < 6 || a < 0) return null;
+    if (even && (a + b) % 2 === 1 && a >= 4) {
+      a -= 4;
+      b += 3;
+    }
     return Array(a).fill(3).concat(Array(b).fill(4)); // сверху вниз: тройки у лидеров, четвёрки внизу
   }
+  const sizesFor = (state, n) => battleSizes(n, !!(state.settings && state.settings.evenBattles));
 
   /* Места и очки одного боя с делёжкой. null, если не все баллы введены. */
   function battleResult(battle) {
@@ -63,20 +69,20 @@ const SG = (() => {
   };
 
   function standings(state, upto) {
-    const tours = state.tours.slice(0, upto ?? state.tours.length).filter(tourComplete);
+    const tours = state.tours.slice(0, upto ?? state.tours.length);
     const rows = {};
     state.players.forEach((p) => {
       rows[p.id] = { id: p.id, name: p.name, rating: Number(p.rating) || 0, pts: 0, score: 0, opps: [], perTour: [], opp: 0 };
     });
     tours.forEach((t, ti) =>
-      t.battles.forEach((b, bi) => {
+      tourComplete(t) && t.battles.forEach((b, bi) => {
         const r = battleResult(b);
         b.players.forEach((id) => {
           const row = rows[id];
           if (!row) return;
           row.pts += r[id].pts;
           row.score += Number(b.scores[id]);
-          row.perTour[ti] = { battle: bi + 1, pts: r[id].pts, place: r[id].place, score: Number(b.scores[id]), size: b.players.length };
+          row.perTour[ti] = { battle: bi + 1, pts: r[id].pts, place: r[id].place, score: Number(b.scores[id]), size: b.players.length, opps: b.players.filter((o) => o !== id) };
           b.players.forEach((o) => o !== id && row.opps.push(o));
         });
       })
@@ -103,7 +109,7 @@ const SG = (() => {
   /* Тур 1: посев по рейтингу. */
   function drawFirst(state) {
     const ps = state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || a.name.localeCompare(b.name, 'ru'));
-    const sizes = battleSizes(ps.length);
+    const sizes = sizesFor(state, ps.length);
     if (!sizes) throw new Error('Нельзя разбить ' + ps.length + ' участников на бои по 3–4 человека.');
     const M = sizes.length;
     const battles = sizes.map(() => []);
@@ -134,7 +140,7 @@ const SG = (() => {
     const idx = Object.fromEntries(ids.map((id, i) => [id, i]));
     const pts = Object.fromEntries(st.map((r) => [r.id, r.pts]));
     const met = metPairs(state);
-    const sizes = battleSizes(ids.length);
+    const sizes = sizesFor(state, ids.length);
     if (!sizes) throw new Error('Нельзя разбить участников на бои по 3–4 человека.');
     const M = sizes.length;
 
@@ -229,6 +235,6 @@ const SG = (() => {
 
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { QUAL_TOURS, PTS, battleSizes, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 if (typeof module !== 'undefined') module.exports = SG;

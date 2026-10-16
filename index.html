@@ -117,9 +117,12 @@ tr:last-child td { border-bottom: 0; }
 td.r, th.r { text-align: right; }
 td.name { white-space: normal; min-width: 160px; font-weight: 500; }
 tr.fin td { background: color-mix(in srgb, var(--gold-board) 16%, transparent); }
-.tcell { display: grid; line-height: 1.2; }
-.tcell b { font-family: var(--font-mono); font-weight: 600; }
-.tcell small { color: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+.tcell { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.opps { display: grid; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 10.5px; line-height: 1.2; color: var(--muted); text-align: right; min-width: 2.4em; padding-right: 7px; border-right: 1px solid var(--line); cursor: help; }
+.tp { display: grid; line-height: 1.2; text-align: right; }
+.tp b { font-family: var(--font-mono); font-weight: 600; }
+.tp small { color: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
 .ptable td input { width: 100%; }
 .ptable td input.rt { width: 90px; text-align: right; font-family: var(--font-mono); }
 
@@ -183,14 +186,20 @@ const SG = (() => {
 
   const pairKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
 
-  /* Размеры боёв: максимум по 3, бои по 4 — только чтобы закрыть остаток (b = N mod 3). */
-  function battleSizes(n) {
+  /* Размеры боёв: максимум по 3, бои по 4 — только чтобы закрыть остаток (b = N mod 3).
+     even = true: если боёв нечётное число, 4 боя по 3 заменяются на 3 боя по 4 (боёв становится на один меньше). */
+  function battleSizes(n, even) {
     if (n === 3 || n === 4) return [n];
-    const b = n % 3;
-    const a = (n - 4 * b) / 3;
+    let b = n % 3;
+    let a = (n - 4 * b) / 3;
     if (n < 6 || a < 0) return null;
+    if (even && (a + b) % 2 === 1 && a >= 4) {
+      a -= 4;
+      b += 3;
+    }
     return Array(a).fill(3).concat(Array(b).fill(4)); // сверху вниз: тройки у лидеров, четвёрки внизу
   }
+  const sizesFor = (state, n) => battleSizes(n, !!(state.settings && state.settings.evenBattles));
 
   /* Места и очки одного боя с делёжкой. null, если не все баллы введены. */
   function battleResult(battle) {
@@ -241,20 +250,20 @@ const SG = (() => {
   };
 
   function standings(state, upto) {
-    const tours = state.tours.slice(0, upto ?? state.tours.length).filter(tourComplete);
+    const tours = state.tours.slice(0, upto ?? state.tours.length);
     const rows = {};
     state.players.forEach((p) => {
       rows[p.id] = { id: p.id, name: p.name, rating: Number(p.rating) || 0, pts: 0, score: 0, opps: [], perTour: [], opp: 0 };
     });
     tours.forEach((t, ti) =>
-      t.battles.forEach((b, bi) => {
+      tourComplete(t) && t.battles.forEach((b, bi) => {
         const r = battleResult(b);
         b.players.forEach((id) => {
           const row = rows[id];
           if (!row) return;
           row.pts += r[id].pts;
           row.score += Number(b.scores[id]);
-          row.perTour[ti] = { battle: bi + 1, pts: r[id].pts, place: r[id].place, score: Number(b.scores[id]), size: b.players.length };
+          row.perTour[ti] = { battle: bi + 1, pts: r[id].pts, place: r[id].place, score: Number(b.scores[id]), size: b.players.length, opps: b.players.filter((o) => o !== id) };
           b.players.forEach((o) => o !== id && row.opps.push(o));
         });
       })
@@ -281,7 +290,7 @@ const SG = (() => {
   /* Тур 1: посев по рейтингу. */
   function drawFirst(state) {
     const ps = state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || a.name.localeCompare(b.name, 'ru'));
-    const sizes = battleSizes(ps.length);
+    const sizes = sizesFor(state, ps.length);
     if (!sizes) throw new Error('Нельзя разбить ' + ps.length + ' участников на бои по 3–4 человека.');
     const M = sizes.length;
     const battles = sizes.map(() => []);
@@ -312,7 +321,7 @@ const SG = (() => {
     const idx = Object.fromEntries(ids.map((id, i) => [id, i]));
     const pts = Object.fromEntries(st.map((r) => [r.id, r.pts]));
     const met = metPairs(state);
-    const sizes = battleSizes(ids.length);
+    const sizes = sizesFor(state, ids.length);
     if (!sizes) throw new Error('Нельзя разбить участников на бои по 3–4 человека.');
     const M = sizes.length;
 
@@ -407,7 +416,7 @@ const SG = (() => {
 
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { QUAL_TOURS, PTS, battleSizes, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 
 </script>
@@ -420,7 +429,7 @@ const SG = (() => {
   const LS_UI = 'sg-swiss-ui-v1';
 
   /* ---------- состояние ---------- */
-  const emptyState = () => ({ v: 1, name: 'Своя игра', example: false, settings: { seed1: 'pots', tiebreaks: ['buch', 'score', 'rating'] }, players: [], tours: [], final: null });
+  const emptyState = () => ({ v: 1, name: 'Своя игра', example: false, settings: { seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, players: [], tours: [], final: null });
 
   function makeDemo() {
     const first = ['Анна', 'Борис', 'Вера', 'Глеб', 'Дарья', 'Егор', 'Жанна', 'Илья', 'Ксения', 'Лев', 'Мария', 'Никита', 'Ольга', 'Павел', 'Роман', 'Софья', 'Тимур', 'Ульяна', 'Фёдор', 'Юлия', 'Ярослав', 'Алина', 'Денис', 'Елена', 'Кирилл', 'Лидия', 'Максим', 'Нина', 'Олег', 'Полина', 'Степан'];
@@ -519,8 +528,16 @@ const SG = (() => {
   const anyScore = (tour) => tour.battles.some((b) => b.players.some((id) => b.scores[id] !== null && b.scores[id] !== ''));
   const filled = (tour) => tour.battles.filter((b) => SG.battleResult(b)).length;
 
-  function sizesText(n) {
-    const s = SG.battleSizes(n);
+  function evenNote(n) {
+    const base = SG.battleSizes(n, false), ev = SG.battleSizes(n, true);
+    if (!base) return '';
+    const M = base.length;
+    if (M % 2 === 0) return 'Для ' + n + ' участников боёв и так чётное число: ' + M + '.';
+    if (ev.length === M) return 'Для ' + n + ' участников чётное число боёв не получается.';
+    return 'Без галочки: ' + sizesText(n, false) + ' — ' + M + ' ' + plural(M, 'бой', 'боя', 'боёв') + '. С галочкой: ' + sizesText(n, true) + ' — ' + ev.length + ' ' + plural(ev.length, 'бой', 'боя', 'боёв') + '.';
+  }
+  function sizesText(n, even) {
+    const s = SG.battleSizes(n, even === undefined ? !!state.settings.evenBattles : even);
     if (!s) return n < 6 ? 'нужно хотя бы 6 участников' : 'нельзя разбить на бои по 3–4';
     const a = s.filter((x) => x === 3).length, b = s.filter((x) => x === 4).length;
     const parts = [];
@@ -647,7 +664,8 @@ const SG = (() => {
       : `<tr><td class="r num">${i + 1}</td><td><input type="text" id="pn-${p.id}" data-pname="${p.id}" value="${esc(p.name)}" aria-label="Имя"></td><td class="r"><input type="number" class="rt" id="pr-${p.id}" data-prating="${p.id}" value="${esc(p.rating)}" aria-label="Рейтинг"></td><td><button class="linkbtn" data-del="${p.id}" aria-label="Удалить ${esc(p.name)}">удалить</button></td></tr>`).join('');
     const tb = state.settings.tiebreaks;
     const tbSelect = (i) => `<select id="tb${i}" data-tb="${i}" ${canEdit() ? '' : 'disabled'}>${Object.entries(SG.TB).map(([k, d]) => `<option value="${k}"${tb[i] === k ? ' selected' : ''}>${d.label}</option>`).join('')}</select>`;
-    const canDraw = !state.tours.length && SG.battleSizes(n) && canEdit();
+    const canDraw = !state.tours.length && SG.sizesFor(state, n) && canEdit();
+    const evenLocked = state.tours.length > 0 || !canEdit();
 
     return `
     <div class="grid2">
@@ -665,6 +683,8 @@ const SG = (() => {
           <h2>Разбивка на бои</h2>
           <p><b class="num">${n}</b> ${plural(n, 'участник', 'участника', 'участников')} → ${sizesText(n)}.</p>
           <p class="muted">Бои по 3 — у лидеров. Если число участников не делится на 3, один или два нижних боя проходят вчетвером.</p>
+          <label class="radio"><input type="checkbox" id="evenb" ${state.settings.evenBattles ? 'checked' : ''} ${evenLocked ? 'disabled' : ''}><span><b>Чётное число боёв</b> — если боёв получается нечётное число, 4 боя по 3 заменяются на 3 боя по 4. Бои по 4 остаются внизу таблицы.${state.tours.length ? ' Настройка закрыта после жеребьёвки первого тура.' : ''}</span></label>
+          ${n >= 6 ? `<p class="muted" style="font-size:13px">${evenNote(n)}</p>` : ''}
           ${canDraw ? '<div><button class="btn primary big" data-act="draw">Жеребьёвка 1 тура</button></div>' : ''}
         </section>
         <section class="panel">
@@ -691,7 +711,7 @@ const SG = (() => {
   function viewTour(t) {
     const tour = state.tours[t];
     if (!tour) {
-      const ready = t === state.tours.length && (t === 0 ? !!SG.battleSizes(state.players.length) : tourDone(t - 1));
+      const ready = t === state.tours.length && (t === 0 ? !!SG.sizesFor(state, state.players.length) : tourDone(t - 1));
       if (ready && canEdit()) return `<div class="cta"><span class="eyebrow">Тур ${t + 1}</span><h2>${t === 0 ? 'Жеребьёвка по рейтингу' : 'Швейцарская жеребьёвка по текущей таблице'}</h2><p class="muted">${t === 0 ? state.players.length + ' участников → ' + sizesText(state.players.length) + '.' : 'Участники с близкими очками попадут в один бой. Никто не встретится с тем, с кем уже играл.'}</p><button class="btn primary big" data-act="draw">Жеребьёвка тура ${t + 1}</button></div>`;
       return `<div class="cta"><span class="eyebrow">Тур ${t + 1}</span><h2>Тур ещё не разыгран</h2><p class="muted">${t === 0 ? 'Сначала заполните список участников.' : 'Жеребьёвка станет доступна, когда будут введены все результаты тура ' + t + '.'}</p></div>`;
     }
@@ -799,17 +819,22 @@ const SG = (() => {
     const st = SG.standings(state);
     const tb = state.settings.tiebreaks;
     const fin = qualDone();
+    const rk = Object.fromEntries(st.map((r) => [r.id, r.rank]));
+    const nm = Object.fromEntries(st.map((r) => [r.id, r.name]));
     const rows = st.map((r) => {
       const cells = [0, 1, 2, 3].map((t) => {
         const x = r.perTour[t];
-        return `<td class="r">${x ? `<span class="tcell"><b>${fmt(x.pts)}</b><small>бой ${x.battle} · ${x.score}</small></span>` : '<span class="muted">—</span>'}</td>`;
+        if (!x) return '<td class="r"><span class="muted">—</span></td>';
+        const opps = x.opps.slice().sort((a, b) => rk[a] - rk[b]);
+        const tip = 'Соперники: ' + opps.map((o) => rk[o] + '. ' + nm[o]).join(', ');
+        return `<td class="r"><span class="tcell"><span class="opps" title="${esc(tip)}" data-opps="${opps.join(',')}">${opps.map((o) => `<span>${rk[o]}</span>`).join('')}</span><span class="tp"><b>${fmt(x.pts)}</b><small>бой ${x.battle} · ${x.score}</small></span></span></td>`;
       }).join('');
-      return `<tr class="${fin && r.rank <= 3 ? 'fin' : ''}"><td class="r num">${r.rank}</td><td class="name">${esc(r.name)}${fin && r.rank <= 3 ? ' <span class="chip">финал</span>' : ''}</td><td class="r num"><b>${fmt(r.pts)}</b></td>${cells}${tb.map((k) => `<td class="r num">${k === 'buch' ? fmt(Math.round(r.opp * 100) / 100) : esc(SG.TB[k].get(r))}</td>`).join('')}</tr>`;
+      return `<tr id="row-${r.id}" class="${fin && r.rank <= 3 ? 'fin' : ''}"><td class="r num">${r.rank}</td><td class="name">${esc(r.name)}${fin && r.rank <= 3 ? ' <span class="chip">финал</span>' : ''}</td><td class="r num"><b>${fmt(r.pts)}</b></td>${cells}${tb.map((k) => `<td class="r num">${k === 'buch' ? fmt(Math.round(r.opp * 100) / 100) : esc(SG.TB[k].get(r))}</td>`).join('')}</tr>`;
     }).join('');
     return `<section style="display:grid;gap:14px">
       <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Турнирная таблица</span><h2>После ${done} ${plural(done, 'тура', 'туров', 'туров')}</h2></div>
       <button class="btn" data-act="copy-table">Скопировать для Excel</button></div>
-      <p class="muted">Порядок: очки, затем ${tb.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}. «Сила соперников» — средние очки всех, с кем участник играл в боях. В клетках туров — очки, номер боя и набранные баллы.</p>
+      <p class="muted">Порядок: очки, затем ${tb.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}. «Сила соперников» — средние очки всех, с кем участник играл в боях. В клетках туров: слева мелко — места соперников в этой таблице (наведите или нажмите, чтобы подсветить их строки), справа — очки, номер боя и набранные баллы.</p>
       <div class="tablewrap"><table><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Очки</th><th class="r">Т1</th><th class="r">Т2</th><th class="r">Т3</th><th class="r">Т4</th>${tb.map((k) => `<th class="r">${SG.TB[k].short}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
     </section>`;
   }
@@ -820,7 +845,8 @@ const SG = (() => {
       <p>Турнир — 4 отборочных тура и финал. В каждом туре каждый участник играет ровно один бой. За 4 тура никто не встречается с одним и тем же соперником дважды.</p></section>
       <section><h3>1. Размер боёв</h3>
       <p>Бои по 3 участника. Если число участников не делится на 3, остаток закрывается боями на 4: при остатке 1 — один бой на 4, при остатке 2 — два. Бои на 4 ставятся в низ таблицы, то есть достаются аутсайдерам.</p>
-      <p class="muted">Например, 31 = 9 × 3 + 4; 32 = 8 × 3 + 2 × 4; 30 = 10 × 3.</p></section>
+      <p class="muted">Например, 31 = 9 × 3 + 4; 32 = 8 × 3 + 2 × 4; 30 = 10 × 3.</p>
+      <p>Опция «Чётное число боёв» (ставится до жеребьёвки первого тура): если боёв получается нечётное число, 4 боя по 3 заменяются на 3 боя по 4, и боёв становится на один меньше. Например, 33 = 11 × 3 превращается в 7 × 3 + 3 × 4 (10 боёв), 35 = 9 × 3 + 2 × 4 — в 5 × 3 + 5 × 4 (10 боёв). Если боёв и так чётное число (30, 31, 32 участника), ничего не меняется.</p></section>
       <section><h3>2. Очки за бой</h3>
       <div style="overflow-x:auto"><div class="ptsgrid"><div class="h lh">Место</div><div class="h">1</div><div class="h">2</div><div class="h">3</div><div class="h">4</div>
       <div class="lh">Бой на 3</div><div>2</div><div>1</div><div>0</div><div>—</div>
@@ -888,6 +914,7 @@ const SG = (() => {
       const j = tb.indexOf(val); if (j >= 0 && j !== i) tb[j] = tb[i];
       tb[i] = val; save(); render();
     } else if (el.name === 'seed1') { state.settings.seed1 = el.value; save(); }
+    else if (el.id === 'evenb') { state.settings.evenBattles = el.checked; save(); render(); }
     else if (el.dataset.fscore) { render(); }
     else if (el.dataset.score) { setTimeout(render, 0); } // после перехода фокуса: показать кнопку следующего тура и т.п.
     else if (el.id === 'importfile' && el.files && el.files[0]) {
@@ -896,12 +923,22 @@ const SG = (() => {
       fr.readAsText(el.files[0]);
     }
   });
+  /* подсветка строк соперников в таблице */
+  function highlightOpps(el) {
+    document.querySelectorAll('tr.hl').forEach((tr) => tr.classList.remove('hl'));
+    if (!el) return;
+    el.dataset.opps.split(',').forEach((id) => { const tr = document.getElementById('row-' + id); if (tr) tr.classList.add('hl'); });
+  }
+  app.addEventListener('mouseover', (e) => { const o = e.target.closest && e.target.closest('.opps'); highlightOpps(o); });
+  app.addEventListener('mouseleave', () => highlightOpps(null));
   app.addEventListener('keydown', (e) => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset && e.target.dataset.swap) { e.preventDefault(); e.target.click(); }
   });
   app.addEventListener('click', (e) => {
     const tabEl = e.target.closest('[data-tab]');
     if (tabEl) return setTab(tabEl.dataset.tab);
+    const oppEl = e.target.closest('.opps');
+    if (oppEl) return highlightOpps(oppEl);
     const sw = e.target.closest('[data-swap]');
     if (sw) {
       const [bi, id] = sw.dataset.swap.split(':');
@@ -957,7 +994,7 @@ const SG = (() => {
       try {
         const s = JSON.parse(document.getElementById('importtxt').value);
         if (!s || !Array.isArray(s.players) || !Array.isArray(s.tours)) throw new Error();
-        s.settings = Object.assign({ seed1: 'pots', tiebreaks: ['buch', 'score', 'rating'] }, s.settings || {});
+        s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, s.settings || {});
         state = s; ui.importOpen = false; saveUi(); save(true); render(); toast('Турнир восстановлен');
       } catch (err) { toast('Это не похоже на копию турнира. Проверьте, что текст скопирован целиком.'); }
     }
