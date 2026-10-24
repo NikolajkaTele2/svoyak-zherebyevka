@@ -92,6 +92,7 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .vgroup h3 { font-family: var(--font-display); font-weight: 400; font-size: 18px; display: flex; gap: 10px; align-items: baseline; }
 .vgroup h3 .muted { font-family: var(--font-body); font-size: 13px; }
 .flist td.name { min-width: 180px; }
+.ftable td.cup { font-weight: 700; color: var(--gold); font-size: 15px; }
 .flist tr.cur td { background: color-mix(in srgb, var(--good) 10%, transparent); }
 
 /* Табло этапов */
@@ -840,10 +841,10 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
 
     let tools = '';
     if (canEdit()) {
-      tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button>`;
+      tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button><button class="btn" data-act="xlsx-tour" data-t="${t}">Скачать Excel</button>`;
       if (canSwap) tools += `<button class="btn${ui.swap ? ' on' : ''}" data-act="swap-toggle">${ui.swap ? 'Готово' : 'Поменять участников местами'}</button>`;
       if (isLast) tools += `<button class="btn danger" data-act="undo-ask">Отменить тур</button>`;
-    } else tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button>`;
+    } else tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button><button class="btn" data-act="xlsx-tour" data-t="${t}">Скачать Excel</button>`;
 
     let next = '';
     if (done && canEdit()) {
@@ -888,6 +889,21 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     </select>${b.host && blocked.has(b.host) ? '<small class="vnote warn">ведёт третий раз подряд</small>' : ''}</div>`;
   }
 
+  function finalTableHtml() {
+    const f = SG.finalStandings(state);
+    const cupTxt = (r) => (r.cup === 'Ф' ? 'Ф' : r.cup === null ? (f.played ? '?' : '—') : fmt(r.cup));
+    const rows = f.rows.map((r) => `<tr class="${r.finalist ? 'fin' : ''}"><td class="r num">${esc(r.place)}</td><td class="name">${esc(r.name)}</td><td class="r num cup">${cupTxt(r)}</td><td class="r num">${fmt(r.qPts)}</td><td class="r num">${r.qRank}</td><td class="r num">${r.finalScore === null ? '' : esc(r.finalScore)}</td></tr>`).join('');
+    const tieNames = f.rows.filter((r) => r.finalist && r.from === 1).map((r) => esc(r.name)).join(', ');
+    return `<section style="display:grid;gap:12px">
+      <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Итог турнира</span><h2>Итоговая таблица и кубковые очки</h2></div>
+        <div class="row"><button class="btn" data-act="copy-final">Скопировать для таблиц</button><button class="btn" data-act="xlsx-final">Скачать Excel</button><button class="btn" data-act="xlsx-all">Весь турнир в Excel</button></div></div>
+      ${f.tieForFirst ? `<div class="banner warn"><p>Первое место в финале поделили: ${tieNames}. Кубковые очки за 1-е место («Ф») делить нельзя — проведите перестрелку и добавьте победителю баллы в финальном бою.</p></div>` : ''}
+      ${!f.played ? '<p class="muted">Места 1–3 и их кубковые очки появятся, когда будут введены баллы финального боя.</p>' : ''}
+      <div class="tablewrap"><table class="ftable"><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Кубковые очки</th><th class="r">Очки в отборе</th><th class="r">Место в отборе</th><th class="r">Баллы в финале</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="muted">Места 1–3 — по баллам финального боя, дальше — по таблице отборочных туров. Кубковые очки: 1 место — Ф, 2 — 25, 3 — 20, 4 — 17, 5 — 15, 6 — 14 и далее на одно меньше до 19 места (1 очко), с 20 места — 0. Если в финале места поделены, очки усредняются, например 2–3 место — по 22,5.</p>
+    </section>`;
+  }
+
   function viewFinal() {
     if (!qualDone()) {
       const done = state.tours.filter(SG.tourComplete).length;
@@ -922,7 +938,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       ${tbNote}
       <div class="battles"><article class="battle${res ? ' ok' : ''}"><div class="bh"><span class="t">Финал</span><span class="chip">3 уч.</span></div>${rows}${finalHostLine(b, players)}</article></div>
       ${podium}
-      <p class="muted">Места в финале определяются по баллам финального боя. Остальные места — по таблице отборочных туров, начиная с 4-го.</p>
+      ${finalTableHtml()}
     </section>`;
   }
 
@@ -950,7 +966,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     }).join('');
     return `<section style="display:grid;gap:14px">
       <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Турнирная таблица</span><h2>После ${done} ${plural(done, 'тура', 'туров', 'туров')}</h2></div>
-      <button class="btn" data-act="copy-table">Скопировать для Excel</button></div>
+      <div class="row"><button class="btn" data-act="copy-table">Скопировать для таблиц</button><button class="btn" data-act="xlsx-table">Скачать Excel</button><button class="btn" data-act="xlsx-all">Весь турнир в Excel</button></div></div>
       <p class="muted">Порядок: очки, затем ${tb.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}. «Сила соперников» — средние очки всех, с кем участник играл в боях. «Личн.» — результат личных встреч среди участников с равными показателями (+1 за каждого, кого обошёл в общем бою, −1 за каждого, кому уступил); «—», если не применялась. Если всё совпало — выше тот, у кого выше исходный рейтинг. В клетках туров: слева мелко — места соперников в этой таблице (наведите или нажмите, чтобы подсветить их строки), справа — очки, номер боя и набранные баллы.</p>
       <div class="tablewrap"><table><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Очки</th><th class="r">Т1</th><th class="r">Т2</th><th class="r">Т3</th><th class="r">Т4</th>${tb.map((k) => `<th class="r">${SG.TB[k].short}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
     </section>`;
@@ -988,6 +1004,8 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       <section><h3>7. Равенство очков и финал</h3>
       <p>При равных очках сравниваются три дополнительных показателя в выбранном порядке (по умолчанию так): сила соперников (средние очки всех, с кем играл), сумма баллов, личная встреча. Порядок меняется на вкладке «Участники». Если совпало всё — выше тот, у кого выше исходный рейтинг. В финал выходят три лучших участника таблицы после 4-го тура.</p>
       <p><b>Личная встреча.</b> Если двое с равными показателями играли в одном бою, выше тот, кто набрал в том бою больше баллов, даже если ни один из них бой не выиграл. Если равных трое и больше, личная встреча применяется, только когда каждый из них играл с каждым: тогда +1 за каждого из группы, кого обошёл в общем бою, и −1 за каждого, кому уступил. Если хотя бы одна пара не встречалась, личная встреча пропускается и решает следующий показатель — так не бывает спорных случаев, куда ставить того, кто ни с кем не играл. Одинаковые баллы в общем бою преимущества не дают.</p></section>
+      <section><h3>8. Итог и кубковые очки</h3>
+      <p>Места 1–3 определяются финальным боем, остальные — таблицей отборочных туров. Кубковые очки: 1 место — Ф, 2 — 25, 3 — 20, 4 — 17, 5 — 15, 6 — 14, 7 — 13 и далее на одно меньше до 19 места (1 очко); с 20 места — 0. Если места в финале поделены, очки усредняются: 2–3 место — по 22,5. Ничью за первое место нужно разрешить перестрелкой. Итоговую таблицу, турнирную таблицу и каждый тур можно скачать в Excel и загрузить в Google Таблицы.</p></section>
     </article>`;
   }
 
@@ -1062,7 +1080,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     } else if (el.dataset.fhost) {
       state.final.host = el.value || null; state.final.hostManual = true; save(); render();
     }
-    else if (el.dataset.fscore) { render(); }
+    else if (el.dataset.fscore) { setTimeout(render, 0); } // после перехода фокуса, иначе теряется ввод в следующем поле
     else if (el.dataset.score) { setTimeout(render, 0); } // после перехода фокуса: показать кнопку следующего тура и т.п.
     else if (el.id === 'openfile' && el.files && el.files[0]) {
       const fr = new FileReader();
@@ -1178,6 +1196,114 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     toast('Файл «' + name + '» сохранён в загрузки');
+  }
+
+  /* ---------- выгрузка в Excel (.xlsx) и копирование для Google Таблиц ---------- */
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  async function saveBinary(name, data, mime) {
+    if (inArtifact) {
+      let dl = null;
+      try { dl = await window.claude.use('downloads'); } catch (e) {}
+      if (!dl) return toast('Скачивание файлов здесь недоступно');
+      try { await dl.save({ filename: name, data }); toast('Файл сохранён'); }
+      catch (e) {
+        if (e && e.code === 'declined') return;
+        toast(e && e.code === 'rate_limited' ? 'Подождите пару секунд и попробуйте снова' : 'Скачать файл здесь не получилось');
+      }
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([data], { type: mime }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast('Файл «' + name + '» сохранён в загрузки');
+  }
+  const xH = (v) => ({ v, s: 'h' }), xB = (v) => ({ v, s: 'b' }), xT = (v) => ({ v, s: 't' });
+  const xNum = (v) => (v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v));
+  const cupVal = (c) => (c === null || c === undefined ? null : c);
+  const placeVal = (p) => (p === null || p === undefined ? null : /^\d+$/.test(String(p)) ? Number(p) : String(p)); // «4» — число, «2–3» — текст
+
+  /* Тур сеткой, как в прежней таблице: площадки колонками, бои друг под другом. */
+  function tourGridSheet(t) {
+    const tour = state.tours[t], pl = byId();
+    const seed = t ? Object.fromEntries(SG.standings(state, t).map((r) => [r.id, r.rank]))
+      : Object.fromEntries(state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).map((p, i) => [p.id, i + 1]));
+    const rows = [], merges = [], W = 5, STEP = 6;
+    const put = (r, c, v) => { (rows[r] = rows[r] || [])[c] = v; };
+    const merge = (r, c) => merges.push(XLSX.col(c) + (r + 1) + ':' + XLSX.col(c + W - 1) + (r + 1));
+    put(0, 0, xT(state.name + ' — тур ' + (t + 1)));
+    const hasV = tour.battles.some((b) => b.venue !== null && b.venue !== undefined);
+    const columns = hasV
+      ? [...SG.venueGroups(tour.battles).entries()].sort((a, b) => a[0] - b[0]).map(([v, idxs]) => ({ title: venueName(v), idxs }))
+      : (() => { const per = Math.ceil(tour.battles.length / 5); return Array.from({ length: Math.min(5, tour.battles.length) }, (_, c) => ({ title: null, idxs: tour.battles.map((_, i) => i).slice(c * per, c * per + per) })).filter((c) => c.idxs.length); })();
+    columns.forEach((colm, ci) => {
+      const c0 = ci * STEP;
+      let r = 2;
+      if (colm.title) { put(r, c0, xB(colm.title)); merge(r, c0); r++; }
+      colm.idxs.forEach((bi) => {
+        const b = tour.battles[bi], res = SG.battleResult(b);
+        put(r, c0, xB('Бой ' + (bi + 1) + (b.host ? ' · ведущий: ' + pl[b.host].name : ''))); merge(r, c0); r++;
+        ['№', 'Участник', 'Баллы', 'Место', 'Очки'].forEach((h, k) => put(r, c0 + k, xH(h))); r++;
+        b.players.forEach((id) => {
+          put(r, c0, seed[id]); put(r, c0 + 1, pl[id].name); put(r, c0 + 2, xNum(b.scores[id]));
+          if (res) { put(r, c0 + 3, placeVal(res[id].place)); put(r, c0 + 4, res[id].pts); }
+          r++;
+        });
+        r++;
+      });
+    });
+    merges.push('A1:' + XLSX.col(Math.max(W, columns.length * STEP - 2)) + '1');
+    const cols = [];
+    columns.forEach(() => cols.push(5, 24, 8, 7, 7, 2));
+    return { name: 'Тур ' + (t + 1), rows, merges, cols };
+  }
+  function tourListSheet(t) {
+    const tour = state.tours[t], pl = byId();
+    const seed = t ? Object.fromEntries(SG.standings(state, t).map((r) => [r.id, r.rank])) : {};
+    const rows = [['Бой', 'Площадка', '№ на площадке', 'Ведущий', t ? 'Место перед туром' : 'Рейтинг', 'Участник', 'Баллы', 'Место в бою', 'Очки'].map(xH)];
+    tour.battles.forEach((b, bi) => {
+      const res = SG.battleResult(b), hasV = b.venue !== null && b.venue !== undefined;
+      b.players.forEach((id) => rows.push([bi + 1, hasV ? venueName(b.venue) : null, hasV ? b.slot : null, b.host ? pl[b.host].name : null, t ? seed[id] : xNum(pl[id].rating), pl[id].name, xNum(b.scores[id]), res ? placeVal(res[id].place) : null, res ? res[id].pts : null]));
+    });
+    return { name: 'Тур ' + (t + 1) + ' списком', rows, freeze: 1, cols: [6, 14, 8, 22, 10, 26, 8, 8, 7] };
+  }
+  function standingsSheet() {
+    const st = SG.standings(state), tb = state.settings.tiebreaks;
+    const done = state.tours.filter(SG.tourComplete).length;
+    const rows = [['Место', 'Участник', 'Очки', 'Т1', 'Т2', 'Т3', 'Т4', ...tb.map((k) => SG.TB[k].label)].map(xH)];
+    st.forEach((r) => rows.push([r.rank, r.name, r.pts, ...[0, 1, 2, 3].map((t) => (r.perTour[t] ? r.perTour[t].pts : null)), ...tb.map((k) => (k === 'h2h' ? (r.h2h === null ? null : r.h2h) : Math.round(SG.TB[k].get(r) * 100) / 100))]));
+    return { name: 'Таблица после ' + done + ' ' + plural(done, 'тура', 'туров', 'туров'), rows, freeze: 1, cols: [7, 26, 7, 6, 6, 6, 6, 16, 16, 16] };
+  }
+  function finalSheet() {
+    const f = SG.finalStandings(state);
+    const rows = [['Место', 'Участник', 'Кубковые очки', 'Очки в отборе', 'Место в отборе', 'Баллы в финале'].map(xH)];
+    f.rows.forEach((r) => rows.push([placeVal(r.place), r.name, cupVal(r.cup), r.qPts, r.qRank, r.finalScore]));
+    return { name: 'Итог', rows, freeze: 1, cols: [8, 26, 15, 14, 15, 15] };
+  }
+  const fileBase = () => safeBase(state.name);
+  function exportXlsx(kind, t) {
+    let sheets, name;
+    if (kind === 'tour') { sheets = [tourGridSheet(t), tourListSheet(t)]; name = fileBase() + ' — тур ' + (t + 1) + '.xlsx'; }
+    else if (kind === 'table') { sheets = [standingsSheet()]; name = fileBase() + ' — таблица.xlsx'; }
+    else if (kind === 'final') { sheets = [finalSheet(), standingsSheet()]; name = fileBase() + ' — итог.xlsx'; }
+    else {
+      sheets = [];
+      if (state.final) sheets.push(finalSheet());
+      sheets.push(standingsSheet());
+      state.tours.forEach((_, i) => sheets.push(tourGridSheet(i)));
+      state.tours.forEach((_, i) => sheets.push(tourListSheet(i)));
+      name = fileBase() + '.xlsx';
+    }
+    try { saveBinary(name, XLSX.workbook(sheets), XLSX_MIME); }
+    catch (e) { toast('Не удалось собрать файл Excel'); }
+  }
+  /* Лист → текст с табуляцией: вставляется в Google Таблицы и Excel по ячейкам. */
+  function sheetTsv(sh) {
+    return sh.rows.map((row) => (row || []).map((c) => {
+      const v = c && typeof c === 'object' ? c.v : c;
+      if (v === null || v === undefined) return '';
+      return typeof v === 'number' ? fmt(v) : String(v).replace(/[\t\n\r]+/g, ' ');
+    }).join('\t')).join('\n');
   }
 
   /* ---------- установка как приложение (PWA) ---------- */
@@ -1339,12 +1465,12 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       } else txt += bs.map(line).join('\n');
       return copy(txt, 'Состав тура скопирован');
     }
-    if (act === 'copy-table') {
-      const st = SG.standings(state), tb = state.settings.tiebreaks;
-      const head = ['Место', 'Участник', 'Очки', 'Т1', 'Т2', 'Т3', 'Т4', ...tb.map((k) => SG.TB[k].label)].join('\t');
-      const lines = st.map((r) => [r.rank, r.name, fmt(r.pts), ...[0, 1, 2, 3].map((t) => (r.perTour[t] ? fmt(r.perTour[t].pts) : '')), ...tb.map((k) => tbCell(k, r))].join('\t'));
-      return copy([head, ...lines].join('\n'), 'Таблица скопирована — вставьте в Excel');
-    }
+    if (act === 'copy-table') return copy(sheetTsv(standingsSheet()), 'Таблица скопирована — вставьте в Google Таблицы или Excel');
+    if (act === 'copy-final') return copy(sheetTsv(finalSheet()), 'Итоговая таблица скопирована — вставьте в Google Таблицы или Excel');
+    if (act === 'xlsx-tour') return exportXlsx('tour', Number(a.dataset.t));
+    if (act === 'xlsx-table') return exportXlsx('table');
+    if (act === 'xlsx-final') return exportXlsx('final');
+    if (act === 'xlsx-all') return exportXlsx('all');
     if (act === 'export') return copy(JSON.stringify(state), 'Резервная копия скопирована');
     if (act === 'import-do') {
       const s = parseTournament(document.getElementById('importtxt').value);

@@ -13,7 +13,8 @@ const wr = (p, s) => { fs.mkdirSync(path.dirname(path.join(root, p)), { recursiv
 
 const tpl = rd('src/app.html');
 const engine = rd('src/engine.js').replace(/if \(typeof module[^\n]*\n?/, '');
-const withEngine = tpl.replace('/*ENGINE*/', () => engine);
+const xlsx = rd('src/xlsx.js').replace(/if \(typeof module[^\n]*\n?/, '');
+const withEngine = tpl.replace('/*ENGINE*/', () => engine + '\n' + xlsx);
 
 const googleFonts =
   '<link rel="preconnect" href="https://fonts.googleapis.com">\n' +

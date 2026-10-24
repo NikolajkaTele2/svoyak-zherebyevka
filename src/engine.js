@@ -403,8 +403,45 @@ const SG = (() => {
   /* Ведущий финала: первый в списке ведущих, кто не играет в финале. */
   const finalHost = (players, hostIds, blocked) => (hostIds || []).find((id) => !players.includes(id) && !(blocked && blocked.has(id))) || null;
 
+  /* ---------- Кубковые очки и итоговая таблица ---------- */
+  // 1 — «Ф», 2 — 25, 3 — 20, 4 — 17, 5 — 15, 6 — 14 … 19 — 1, 20 и ниже — 0
+  const cupForPlace = (p) => (p === 1 ? 'Ф' : p === 2 ? 25 : p === 3 ? 20 : p === 4 ? 17 : p <= 19 ? 20 - p : 0);
+  /* Поделённые места from–to: очки усредняются ((15 + 14) / 2 = 14,5). Ничья за 1-е место — null: нужна перестрелка. */
+  function cupPoints(from, to) {
+    if (to === undefined) to = from;
+    if (from === 1) return to === 1 ? 'Ф' : null;
+    let s = 0;
+    for (let p = from; p <= to; p++) s += cupForPlace(p);
+    return Math.round((s / (to - from + 1)) * 100) / 100;
+  }
+  const parsePlace = (s) => { const m = String(s).split(/[–-]/).map(Number); return { from: m[0], to: m[1] || m[0] }; };
+
+  /* Итог турнира: места 1–3 — по финальному бою, дальше — по таблице отборочных туров. */
+  function finalStandings(state) {
+    const st = standings(state, 4);
+    const fin = state.final;
+    const res = fin ? battleResult(fin) : null;
+    const finIds = fin ? fin.players : [];
+    const out = [];
+    if (fin) {
+      const order = finIds.slice().sort((a, b) => (res ? Number(fin.scores[b]) - Number(fin.scores[a]) : 0) || st.findIndex((r) => r.id === a) - st.findIndex((r) => r.id === b));
+      order.forEach((id) => {
+        const q = st.find((r) => r.id === id);
+        const pl = res ? parsePlace(res[id].place) : null;
+        out.push({ id, name: q.name, finalist: true, place: pl ? (pl.from === pl.to ? String(pl.from) : pl.from + '–' + pl.to) : 'финал', from: pl ? pl.from : null, to: pl ? pl.to : null, cup: pl ? cupPoints(pl.from, pl.to) : null, qPts: q.pts, qRank: q.rank, finalScore: res ? Number(fin.scores[id]) : null });
+      });
+    }
+    let p = finIds.length + 1;
+    st.filter((r) => !finIds.includes(r.id)).forEach((r) => {
+      out.push({ id: r.id, name: r.name, finalist: false, place: String(p), from: p, to: p, cup: fin ? cupPoints(p) : null, qPts: r.pts, qRank: r.rank, finalScore: null });
+      p++;
+    });
+    const tieForFirst = !!(res && out.some((r) => r.finalist && r.from === 1 && r.to > 1));
+    return { rows: out, played: !!res, tieForFirst };
+  }
+
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 if (typeof module !== 'undefined') module.exports = SG;

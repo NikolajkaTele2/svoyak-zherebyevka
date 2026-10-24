@@ -236,6 +236,7 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .vgroup h3 { font-family: var(--font-display); font-weight: 400; font-size: 18px; display: flex; gap: 10px; align-items: baseline; }
 .vgroup h3 .muted { font-family: var(--font-body); font-size: 13px; }
 .flist td.name { min-width: 180px; }
+.ftable td.cup { font-weight: 700; color: var(--gold); font-size: 15px; }
 .flist tr.cur td { background: color-mix(in srgb, var(--good) 10%, transparent); }
 
 /* Табло этапов */
@@ -754,9 +755,146 @@ const SG = (() => {
   /* Ведущий финала: первый в списке ведущих, кто не играет в финале. */
   const finalHost = (players, hostIds, blocked) => (hostIds || []).find((id) => !players.includes(id) && !(blocked && blocked.has(id))) || null;
 
+  /* ---------- Кубковые очки и итоговая таблица ---------- */
+  // 1 — «Ф», 2 — 25, 3 — 20, 4 — 17, 5 — 15, 6 — 14 … 19 — 1, 20 и ниже — 0
+  const cupForPlace = (p) => (p === 1 ? 'Ф' : p === 2 ? 25 : p === 3 ? 20 : p === 4 ? 17 : p <= 19 ? 20 - p : 0);
+  /* Поделённые места from–to: очки усредняются ((15 + 14) / 2 = 14,5). Ничья за 1-е место — null: нужна перестрелка. */
+  function cupPoints(from, to) {
+    if (to === undefined) to = from;
+    if (from === 1) return to === 1 ? 'Ф' : null;
+    let s = 0;
+    for (let p = from; p <= to; p++) s += cupForPlace(p);
+    return Math.round((s / (to - from + 1)) * 100) / 100;
+  }
+  const parsePlace = (s) => { const m = String(s).split(/[–-]/).map(Number); return { from: m[0], to: m[1] || m[0] }; };
+
+  /* Итог турнира: места 1–3 — по финальному бою, дальше — по таблице отборочных туров. */
+  function finalStandings(state) {
+    const st = standings(state, 4);
+    const fin = state.final;
+    const res = fin ? battleResult(fin) : null;
+    const finIds = fin ? fin.players : [];
+    const out = [];
+    if (fin) {
+      const order = finIds.slice().sort((a, b) => (res ? Number(fin.scores[b]) - Number(fin.scores[a]) : 0) || st.findIndex((r) => r.id === a) - st.findIndex((r) => r.id === b));
+      order.forEach((id) => {
+        const q = st.find((r) => r.id === id);
+        const pl = res ? parsePlace(res[id].place) : null;
+        out.push({ id, name: q.name, finalist: true, place: pl ? (pl.from === pl.to ? String(pl.from) : pl.from + '–' + pl.to) : 'финал', from: pl ? pl.from : null, to: pl ? pl.to : null, cup: pl ? cupPoints(pl.from, pl.to) : null, qPts: q.pts, qRank: q.rank, finalScore: res ? Number(fin.scores[id]) : null });
+      });
+    }
+    let p = finIds.length + 1;
+    st.filter((r) => !finIds.includes(r.id)).forEach((r) => {
+      out.push({ id: r.id, name: r.name, finalist: false, place: String(p), from: p, to: p, cup: fin ? cupPoints(p) : null, qPts: r.pts, qRank: r.rank, finalScore: null });
+      p++;
+    });
+    const tieForFirst = !!(res && out.some((r) => r.finalist && r.from === 1 && r.to > 1));
+    return { rows: out, played: !!res, tieForFirst };
+  }
+
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+})();
+
+/* Минимальная запись .xlsx без библиотек: ZIP без сжатия + SpreadsheetML.
+   XLSX.workbook([{ name, rows, cols, merges }]) → Uint8Array
+   rows: массив строк; ячейка — строка, число, null или { v, s } где s: 'b' жирный, 'h' заголовок, 't' название, 'w' предупреждение. */
+const XLSX = (() => {
+  const enc = new TextEncoder();
+  const CRC = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+    return t;
+  })();
+  function crc32(u8) { let c = 0xffffffff; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+
+  function zip(files) {
+    const d = new Date();
+    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+    const parts = [], central = [];
+    let offset = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), data = typeof f.data === 'string' ? enc.encode(f.data) : f.data, crc = crc32(data);
+      const h = new DataView(new ArrayBuffer(30));
+      h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+      h.setUint16(10, time, true); h.setUint16(12, date, true); h.setUint32(14, crc, true);
+      h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true); h.setUint16(28, 0, true);
+      parts.push(new Uint8Array(h.buffer), name, data);
+      const c = new DataView(new ArrayBuffer(46));
+      c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true);
+      c.setUint16(12, time, true); c.setUint16(14, date, true); c.setUint32(16, crc, true);
+      c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true);
+      c.setUint32(42, offset, true);
+      central.push(new Uint8Array(c.buffer), name);
+      offset += 30 + name.length + data.length;
+    }
+    const cdSize = central.reduce((s, p) => s + p.length, 0);
+    const e = new DataView(new ArrayBuffer(22));
+    e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+    e.setUint32(12, cdSize, true); e.setUint32(16, offset, true);
+    const all = parts.concat(central, [new Uint8Array(e.buffer)]);
+    const out = new Uint8Array(all.reduce((s, p) => s + p.length, 0));
+    let o = 0; for (const p of all) { out.set(p, o); o += p.length; }
+    return out;
+  }
+
+  const x = (s) => String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const col = (i) => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+  const STYLE = { b: 1, h: 2, t: 3, w: 4 };
+
+  function sheetXml(sh) {
+    const rows = sh.rows.map((row, r) => {
+      const cells = (row || []).map((cell, c) => {
+        if (cell === null || cell === undefined || cell === '') return '';
+        const o = typeof cell === 'object' ? cell : { v: cell };
+        if (o.v === null || o.v === undefined || o.v === '') return o.s ? `<c r="${col(c)}${r + 1}" s="${STYLE[o.s] || 0}"/>` : '';
+        const ref = col(c) + (r + 1), s = o.s ? ` s="${STYLE[o.s] || 0}"` : '';
+        if (typeof o.v === 'number' && isFinite(o.v)) return `<c r="${ref}"${s}><v>${o.v}</v></c>`;
+        return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${x(o.v)}</t></is></c>`;
+      }).join('');
+      return `<row r="${r + 1}">${cells}</row>`;
+    }).join('');
+    const cols = sh.cols && sh.cols.length ? '<cols>' + sh.cols.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('') + '</cols>' : '';
+    const freeze = sh.freeze ? `<sheetViews><sheetView workbookViewId="0"><pane ySplit="${sh.freeze}" topLeftCell="A${sh.freeze + 1}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` : '';
+    const merges = sh.merges && sh.merges.length ? `<mergeCells count="${sh.merges.length}">${sh.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>` : '';
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${freeze}${cols}<sheetData>${rows}</sheetData>${merges}</worksheet>`;
+  }
+
+  const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font><font><sz val="11"/><color rgb="FFA9480F"/><name val="Calibri"/></font></fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8ECF8"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+
+  function sheetName(n, used) {
+    let s = String(n || 'Лист').replace(/[\[\]:*?\/\\]/g, ' ').trim().slice(0, 31) || 'Лист';
+    let k = 2, base = s;
+    while (used.has(s.toLowerCase())) s = base.slice(0, 27) + ' (' + k++ + ')';
+    used.add(s.toLowerCase());
+    return s;
+  }
+
+  function workbook(sheets) {
+    const used = new Set();
+    const names = sheets.map((s) => sheetName(s.name, used));
+    const files = [
+      { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>` },
+      { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+      { name: 'xl/workbook.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((n, i) => `<sheet name="${x(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>` },
+      { name: 'xl/_rels/workbook.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+      { name: 'xl/styles.xml', data: STYLES },
+    ];
+    sheets.forEach((s, i) => files.push({ name: `xl/worksheets/sheet${i + 1}.xml`, data: sheetXml(s) }));
+    return zip(files);
+  }
+
+  return { workbook, col };
 })();
 
 </script>
@@ -1393,10 +1531,10 @@ const SG = (() => {
 
     let tools = '';
     if (canEdit()) {
-      tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button>`;
+      tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button><button class="btn" data-act="xlsx-tour" data-t="${t}">Скачать Excel</button>`;
       if (canSwap) tools += `<button class="btn${ui.swap ? ' on' : ''}" data-act="swap-toggle">${ui.swap ? 'Готово' : 'Поменять участников местами'}</button>`;
       if (isLast) tools += `<button class="btn danger" data-act="undo-ask">Отменить тур</button>`;
-    } else tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button>`;
+    } else tools += `<button class="btn" data-act="copy-tour" data-t="${t}">Скопировать состав</button><button class="btn" data-act="xlsx-tour" data-t="${t}">Скачать Excel</button>`;
 
     let next = '';
     if (done && canEdit()) {
@@ -1441,6 +1579,21 @@ const SG = (() => {
     </select>${b.host && blocked.has(b.host) ? '<small class="vnote warn">ведёт третий раз подряд</small>' : ''}</div>`;
   }
 
+  function finalTableHtml() {
+    const f = SG.finalStandings(state);
+    const cupTxt = (r) => (r.cup === 'Ф' ? 'Ф' : r.cup === null ? (f.played ? '?' : '—') : fmt(r.cup));
+    const rows = f.rows.map((r) => `<tr class="${r.finalist ? 'fin' : ''}"><td class="r num">${esc(r.place)}</td><td class="name">${esc(r.name)}</td><td class="r num cup">${cupTxt(r)}</td><td class="r num">${fmt(r.qPts)}</td><td class="r num">${r.qRank}</td><td class="r num">${r.finalScore === null ? '' : esc(r.finalScore)}</td></tr>`).join('');
+    const tieNames = f.rows.filter((r) => r.finalist && r.from === 1).map((r) => esc(r.name)).join(', ');
+    return `<section style="display:grid;gap:12px">
+      <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Итог турнира</span><h2>Итоговая таблица и кубковые очки</h2></div>
+        <div class="row"><button class="btn" data-act="copy-final">Скопировать для таблиц</button><button class="btn" data-act="xlsx-final">Скачать Excel</button><button class="btn" data-act="xlsx-all">Весь турнир в Excel</button></div></div>
+      ${f.tieForFirst ? `<div class="banner warn"><p>Первое место в финале поделили: ${tieNames}. Кубковые очки за 1-е место («Ф») делить нельзя — проведите перестрелку и добавьте победителю баллы в финальном бою.</p></div>` : ''}
+      ${!f.played ? '<p class="muted">Места 1–3 и их кубковые очки появятся, когда будут введены баллы финального боя.</p>' : ''}
+      <div class="tablewrap"><table class="ftable"><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Кубковые очки</th><th class="r">Очки в отборе</th><th class="r">Место в отборе</th><th class="r">Баллы в финале</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="muted">Места 1–3 — по баллам финального боя, дальше — по таблице отборочных туров. Кубковые очки: 1 место — Ф, 2 — 25, 3 — 20, 4 — 17, 5 — 15, 6 — 14 и далее на одно меньше до 19 места (1 очко), с 20 места — 0. Если в финале места поделены, очки усредняются, например 2–3 место — по 22,5.</p>
+    </section>`;
+  }
+
   function viewFinal() {
     if (!qualDone()) {
       const done = state.tours.filter(SG.tourComplete).length;
@@ -1475,7 +1628,7 @@ const SG = (() => {
       ${tbNote}
       <div class="battles"><article class="battle${res ? ' ok' : ''}"><div class="bh"><span class="t">Финал</span><span class="chip">3 уч.</span></div>${rows}${finalHostLine(b, players)}</article></div>
       ${podium}
-      <p class="muted">Места в финале определяются по баллам финального боя. Остальные места — по таблице отборочных туров, начиная с 4-го.</p>
+      ${finalTableHtml()}
     </section>`;
   }
 
@@ -1503,7 +1656,7 @@ const SG = (() => {
     }).join('');
     return `<section style="display:grid;gap:14px">
       <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Турнирная таблица</span><h2>После ${done} ${plural(done, 'тура', 'туров', 'туров')}</h2></div>
-      <button class="btn" data-act="copy-table">Скопировать для Excel</button></div>
+      <div class="row"><button class="btn" data-act="copy-table">Скопировать для таблиц</button><button class="btn" data-act="xlsx-table">Скачать Excel</button><button class="btn" data-act="xlsx-all">Весь турнир в Excel</button></div></div>
       <p class="muted">Порядок: очки, затем ${tb.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}. «Сила соперников» — средние очки всех, с кем участник играл в боях. «Личн.» — результат личных встреч среди участников с равными показателями (+1 за каждого, кого обошёл в общем бою, −1 за каждого, кому уступил); «—», если не применялась. Если всё совпало — выше тот, у кого выше исходный рейтинг. В клетках туров: слева мелко — места соперников в этой таблице (наведите или нажмите, чтобы подсветить их строки), справа — очки, номер боя и набранные баллы.</p>
       <div class="tablewrap"><table><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Очки</th><th class="r">Т1</th><th class="r">Т2</th><th class="r">Т3</th><th class="r">Т4</th>${tb.map((k) => `<th class="r">${SG.TB[k].short}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
     </section>`;
@@ -1541,6 +1694,8 @@ const SG = (() => {
       <section><h3>7. Равенство очков и финал</h3>
       <p>При равных очках сравниваются три дополнительных показателя в выбранном порядке (по умолчанию так): сила соперников (средние очки всех, с кем играл), сумма баллов, личная встреча. Порядок меняется на вкладке «Участники». Если совпало всё — выше тот, у кого выше исходный рейтинг. В финал выходят три лучших участника таблицы после 4-го тура.</p>
       <p><b>Личная встреча.</b> Если двое с равными показателями играли в одном бою, выше тот, кто набрал в том бою больше баллов, даже если ни один из них бой не выиграл. Если равных трое и больше, личная встреча применяется, только когда каждый из них играл с каждым: тогда +1 за каждого из группы, кого обошёл в общем бою, и −1 за каждого, кому уступил. Если хотя бы одна пара не встречалась, личная встреча пропускается и решает следующий показатель — так не бывает спорных случаев, куда ставить того, кто ни с кем не играл. Одинаковые баллы в общем бою преимущества не дают.</p></section>
+      <section><h3>8. Итог и кубковые очки</h3>
+      <p>Места 1–3 определяются финальным боем, остальные — таблицей отборочных туров. Кубковые очки: 1 место — Ф, 2 — 25, 3 — 20, 4 — 17, 5 — 15, 6 — 14, 7 — 13 и далее на одно меньше до 19 места (1 очко); с 20 места — 0. Если места в финале поделены, очки усредняются: 2–3 место — по 22,5. Ничью за первое место нужно разрешить перестрелкой. Итоговую таблицу, турнирную таблицу и каждый тур можно скачать в Excel и загрузить в Google Таблицы.</p></section>
     </article>`;
   }
 
@@ -1615,7 +1770,7 @@ const SG = (() => {
     } else if (el.dataset.fhost) {
       state.final.host = el.value || null; state.final.hostManual = true; save(); render();
     }
-    else if (el.dataset.fscore) { render(); }
+    else if (el.dataset.fscore) { setTimeout(render, 0); } // после перехода фокуса, иначе теряется ввод в следующем поле
     else if (el.dataset.score) { setTimeout(render, 0); } // после перехода фокуса: показать кнопку следующего тура и т.п.
     else if (el.id === 'openfile' && el.files && el.files[0]) {
       const fr = new FileReader();
@@ -1731,6 +1886,114 @@ const SG = (() => {
     a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     toast('Файл «' + name + '» сохранён в загрузки');
+  }
+
+  /* ---------- выгрузка в Excel (.xlsx) и копирование для Google Таблиц ---------- */
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  async function saveBinary(name, data, mime) {
+    if (inArtifact) {
+      let dl = null;
+      try { dl = await window.claude.use('downloads'); } catch (e) {}
+      if (!dl) return toast('Скачивание файлов здесь недоступно');
+      try { await dl.save({ filename: name, data }); toast('Файл сохранён'); }
+      catch (e) {
+        if (e && e.code === 'declined') return;
+        toast(e && e.code === 'rate_limited' ? 'Подождите пару секунд и попробуйте снова' : 'Скачать файл здесь не получилось');
+      }
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([data], { type: mime }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast('Файл «' + name + '» сохранён в загрузки');
+  }
+  const xH = (v) => ({ v, s: 'h' }), xB = (v) => ({ v, s: 'b' }), xT = (v) => ({ v, s: 't' });
+  const xNum = (v) => (v === null || v === undefined || v === '' || !isFinite(Number(v)) ? null : Number(v));
+  const cupVal = (c) => (c === null || c === undefined ? null : c);
+  const placeVal = (p) => (p === null || p === undefined ? null : /^\d+$/.test(String(p)) ? Number(p) : String(p)); // «4» — число, «2–3» — текст
+
+  /* Тур сеткой, как в прежней таблице: площадки колонками, бои друг под другом. */
+  function tourGridSheet(t) {
+    const tour = state.tours[t], pl = byId();
+    const seed = t ? Object.fromEntries(SG.standings(state, t).map((r) => [r.id, r.rank]))
+      : Object.fromEntries(state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).map((p, i) => [p.id, i + 1]));
+    const rows = [], merges = [], W = 5, STEP = 6;
+    const put = (r, c, v) => { (rows[r] = rows[r] || [])[c] = v; };
+    const merge = (r, c) => merges.push(XLSX.col(c) + (r + 1) + ':' + XLSX.col(c + W - 1) + (r + 1));
+    put(0, 0, xT(state.name + ' — тур ' + (t + 1)));
+    const hasV = tour.battles.some((b) => b.venue !== null && b.venue !== undefined);
+    const columns = hasV
+      ? [...SG.venueGroups(tour.battles).entries()].sort((a, b) => a[0] - b[0]).map(([v, idxs]) => ({ title: venueName(v), idxs }))
+      : (() => { const per = Math.ceil(tour.battles.length / 5); return Array.from({ length: Math.min(5, tour.battles.length) }, (_, c) => ({ title: null, idxs: tour.battles.map((_, i) => i).slice(c * per, c * per + per) })).filter((c) => c.idxs.length); })();
+    columns.forEach((colm, ci) => {
+      const c0 = ci * STEP;
+      let r = 2;
+      if (colm.title) { put(r, c0, xB(colm.title)); merge(r, c0); r++; }
+      colm.idxs.forEach((bi) => {
+        const b = tour.battles[bi], res = SG.battleResult(b);
+        put(r, c0, xB('Бой ' + (bi + 1) + (b.host ? ' · ведущий: ' + pl[b.host].name : ''))); merge(r, c0); r++;
+        ['№', 'Участник', 'Баллы', 'Место', 'Очки'].forEach((h, k) => put(r, c0 + k, xH(h))); r++;
+        b.players.forEach((id) => {
+          put(r, c0, seed[id]); put(r, c0 + 1, pl[id].name); put(r, c0 + 2, xNum(b.scores[id]));
+          if (res) { put(r, c0 + 3, placeVal(res[id].place)); put(r, c0 + 4, res[id].pts); }
+          r++;
+        });
+        r++;
+      });
+    });
+    merges.push('A1:' + XLSX.col(Math.max(W, columns.length * STEP - 2)) + '1');
+    const cols = [];
+    columns.forEach(() => cols.push(5, 24, 8, 7, 7, 2));
+    return { name: 'Тур ' + (t + 1), rows, merges, cols };
+  }
+  function tourListSheet(t) {
+    const tour = state.tours[t], pl = byId();
+    const seed = t ? Object.fromEntries(SG.standings(state, t).map((r) => [r.id, r.rank])) : {};
+    const rows = [['Бой', 'Площадка', '№ на площадке', 'Ведущий', t ? 'Место перед туром' : 'Рейтинг', 'Участник', 'Баллы', 'Место в бою', 'Очки'].map(xH)];
+    tour.battles.forEach((b, bi) => {
+      const res = SG.battleResult(b), hasV = b.venue !== null && b.venue !== undefined;
+      b.players.forEach((id) => rows.push([bi + 1, hasV ? venueName(b.venue) : null, hasV ? b.slot : null, b.host ? pl[b.host].name : null, t ? seed[id] : xNum(pl[id].rating), pl[id].name, xNum(b.scores[id]), res ? placeVal(res[id].place) : null, res ? res[id].pts : null]));
+    });
+    return { name: 'Тур ' + (t + 1) + ' списком', rows, freeze: 1, cols: [6, 14, 8, 22, 10, 26, 8, 8, 7] };
+  }
+  function standingsSheet() {
+    const st = SG.standings(state), tb = state.settings.tiebreaks;
+    const done = state.tours.filter(SG.tourComplete).length;
+    const rows = [['Место', 'Участник', 'Очки', 'Т1', 'Т2', 'Т3', 'Т4', ...tb.map((k) => SG.TB[k].label)].map(xH)];
+    st.forEach((r) => rows.push([r.rank, r.name, r.pts, ...[0, 1, 2, 3].map((t) => (r.perTour[t] ? r.perTour[t].pts : null)), ...tb.map((k) => (k === 'h2h' ? (r.h2h === null ? null : r.h2h) : Math.round(SG.TB[k].get(r) * 100) / 100))]));
+    return { name: 'Таблица после ' + done + ' ' + plural(done, 'тура', 'туров', 'туров'), rows, freeze: 1, cols: [7, 26, 7, 6, 6, 6, 6, 16, 16, 16] };
+  }
+  function finalSheet() {
+    const f = SG.finalStandings(state);
+    const rows = [['Место', 'Участник', 'Кубковые очки', 'Очки в отборе', 'Место в отборе', 'Баллы в финале'].map(xH)];
+    f.rows.forEach((r) => rows.push([placeVal(r.place), r.name, cupVal(r.cup), r.qPts, r.qRank, r.finalScore]));
+    return { name: 'Итог', rows, freeze: 1, cols: [8, 26, 15, 14, 15, 15] };
+  }
+  const fileBase = () => safeBase(state.name);
+  function exportXlsx(kind, t) {
+    let sheets, name;
+    if (kind === 'tour') { sheets = [tourGridSheet(t), tourListSheet(t)]; name = fileBase() + ' — тур ' + (t + 1) + '.xlsx'; }
+    else if (kind === 'table') { sheets = [standingsSheet()]; name = fileBase() + ' — таблица.xlsx'; }
+    else if (kind === 'final') { sheets = [finalSheet(), standingsSheet()]; name = fileBase() + ' — итог.xlsx'; }
+    else {
+      sheets = [];
+      if (state.final) sheets.push(finalSheet());
+      sheets.push(standingsSheet());
+      state.tours.forEach((_, i) => sheets.push(tourGridSheet(i)));
+      state.tours.forEach((_, i) => sheets.push(tourListSheet(i)));
+      name = fileBase() + '.xlsx';
+    }
+    try { saveBinary(name, XLSX.workbook(sheets), XLSX_MIME); }
+    catch (e) { toast('Не удалось собрать файл Excel'); }
+  }
+  /* Лист → текст с табуляцией: вставляется в Google Таблицы и Excel по ячейкам. */
+  function sheetTsv(sh) {
+    return sh.rows.map((row) => (row || []).map((c) => {
+      const v = c && typeof c === 'object' ? c.v : c;
+      if (v === null || v === undefined) return '';
+      return typeof v === 'number' ? fmt(v) : String(v).replace(/[\t\n\r]+/g, ' ');
+    }).join('\t')).join('\n');
   }
 
   /* ---------- установка как приложение (PWA) ---------- */
@@ -1892,12 +2155,12 @@ const SG = (() => {
       } else txt += bs.map(line).join('\n');
       return copy(txt, 'Состав тура скопирован');
     }
-    if (act === 'copy-table') {
-      const st = SG.standings(state), tb = state.settings.tiebreaks;
-      const head = ['Место', 'Участник', 'Очки', 'Т1', 'Т2', 'Т3', 'Т4', ...tb.map((k) => SG.TB[k].label)].join('\t');
-      const lines = st.map((r) => [r.rank, r.name, fmt(r.pts), ...[0, 1, 2, 3].map((t) => (r.perTour[t] ? fmt(r.perTour[t].pts) : '')), ...tb.map((k) => tbCell(k, r))].join('\t'));
-      return copy([head, ...lines].join('\n'), 'Таблица скопирована — вставьте в Excel');
-    }
+    if (act === 'copy-table') return copy(sheetTsv(standingsSheet()), 'Таблица скопирована — вставьте в Google Таблицы или Excel');
+    if (act === 'copy-final') return copy(sheetTsv(finalSheet()), 'Итоговая таблица скопирована — вставьте в Google Таблицы или Excel');
+    if (act === 'xlsx-tour') return exportXlsx('tour', Number(a.dataset.t));
+    if (act === 'xlsx-table') return exportXlsx('table');
+    if (act === 'xlsx-final') return exportXlsx('final');
+    if (act === 'xlsx-all') return exportXlsx('all');
     if (act === 'export') return copy(JSON.stringify(state), 'Резервная копия скопирована');
     if (act === 'import-do') {
       const s = parseTournament(document.getElementById('importtxt').value);
