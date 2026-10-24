@@ -233,8 +233,115 @@ const SG = (() => {
     return out;
   }
 
+  /* ---------- Площадки и ведущие ---------- */
+
+  /* Бои раздаются по площадкам по кругу: при 5 площадках бои 1 и 6 — на 1-й, 2 и 7 — на 2-й и т. д.
+     slot — какой по счёту этот бой на своей площадке. */
+  function venuePlan(m, cfg) {
+    const V = cfg && cfg.count ? Math.max(1, Math.min(10, cfg.count | 0)) : 0;
+    if (!V) return null;
+    return Array.from({ length: m }, (_, i) => ({ venue: i % V, slot: Math.floor(i / V) + 1 }));
+  }
+
+  /* Сводка по раскладке: сколько мест, где лишние бои, где бой один (некому вести). */
+  function venueCheck(m, cfg) {
+    const plan = venuePlan(m, cfg);
+    if (!plan) return null;
+    const V = cfg.count, K = cfg.perVenue || 1;
+    const per = Array(V).fill(0);
+    plan.forEach((p) => per[p.venue]++);
+    return { V, K, slots: V * K, battles: m, per, over: per.map((n, i) => (n > K ? i : -1)).filter((i) => i >= 0), single: per.map((n, i) => (n === 1 ? i : -1)).filter((i) => i >= 0), empty: per.map((n, i) => (n === 0 ? i : -1)).filter((i) => i >= 0) };
+  }
+
+  function venueGroups(battles) {
+    const g = new Map();
+    battles.forEach((b, i) => {
+      if (b.venue === null || b.venue === undefined) return;
+      if (!g.has(b.venue)) g.set(b.venue, []);
+      g.get(b.venue).push(i);
+    });
+    for (const idxs of g.values()) idxs.sort((x, y) => (battles[x].slot || 0) - (battles[y].slot || 0) || x - y);
+    return g;
+  }
+
+  /* Кто может вести бой bi: участники других боёв той же площадки в этом туре. */
+  function hostCandidates(battles, bi, hostIds) {
+    const b = battles[bi];
+    const rank = new Map((hostIds || []).map((id, i) => [id, i]));
+    const out = [];
+    if (!b || b.venue === null || b.venue === undefined) return out;
+    battles.forEach((o, oi) => {
+      if (oi === bi || o.venue !== b.venue) return;
+      o.players.forEach((id) => out.push({ id, battle: oi, rank: rank.has(id) ? rank.get(id) : null }));
+    });
+    return out.sort((a, c) => (a.rank === null ? 1e9 : a.rank) - (c.rank === null ? 1e9 : c.rank) || a.battle - c.battle);
+  }
+
+  const lessKey = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+
+  /* Назначить ведущих. На каждой площадке: один человек ведёт не больше одного боя за тур;
+     сначала стараемся закрыть ведущими все бои, затем берём тех, кто выше в списке ведущих.
+     Назначенные вручную (hostManual) сохраняются, если всё ещё допустимы. */
+  function assignHosts(battles, hostIds) {
+    const rank = new Map((hostIds || []).map((id, i) => [id, i]));
+    battles.forEach((b) => { if (b.venue === null || b.venue === undefined) { b.host = null; b.hostManual = false; } });
+    for (const idxs of venueGroups(battles).values()) {
+      const used = new Set();
+      const free = [];
+      for (const i of idxs) {
+        const b = battles[i];
+        if (b.hostManual) {
+          const ok = b.host === null || (!b.players.includes(b.host) && !used.has(b.host) && idxs.some((j) => j !== i && battles[j].players.includes(b.host)));
+          if (ok) { if (b.host) used.add(b.host); continue; }
+          b.hostManual = false;
+        }
+        free.push(i);
+      }
+      const cands = free.map((i) => {
+        const list = [];
+        for (const j of idxs) if (j !== i) for (const p of battles[j].players) if (rank.has(p) && !used.has(p)) list.push(p);
+        return list.sort((a, c) => rank.get(a) - rank.get(c)).slice(0, 8);
+      });
+      let best = null;
+      if (free.length <= 5) {
+        const pick = [], taken = new Set();
+        (function dfs(k) {
+          if (k === free.length) {
+            const covered = pick.filter(Boolean).length;
+            const key = [-covered, pick.reduce((s, p) => s + (p ? rank.get(p) : 0), 0), ...pick.map((p) => (p ? rank.get(p) : 1e9))];
+            if (!best || lessKey(key, best.key)) best = { key, pick: pick.slice() };
+            return;
+          }
+          for (const p of cands[k]) if (!taken.has(p)) { taken.add(p); pick.push(p); dfs(k + 1); pick.pop(); taken.delete(p); }
+          pick.push(null); dfs(k + 1); pick.pop();
+        })(0);
+      } else {
+        // много боёв на одной площадке — жадно по порядку
+        const taken = new Set();
+        best = { pick: cands.map((list) => { const p = list.find((x) => !taken.has(x)) || null; if (p) taken.add(p); return p; }) };
+      }
+      free.forEach((i, k) => { battles[i].host = best.pick[k] || null; battles[i].hostManual = false; });
+    }
+    return battles;
+  }
+
+  /* Разложить тур по площадкам и назначить ведущих (ручные назначения сбрасываются). */
+  function placeTour(tour, cfg, hostIds) {
+    const plan = venuePlan(tour.battles.length, cfg);
+    tour.battles.forEach((b, i) => {
+      b.venue = plan ? plan[i].venue : null;
+      b.slot = plan ? plan[i].slot : null;
+      b.host = null; b.hostManual = false;
+    });
+    if (plan) assignHosts(tour.battles, hostIds);
+    return tour;
+  }
+
+  /* Ведущий финала: первый в списке ведущих, кто не играет в финале. */
+  const finalHost = (players, hostIds) => (hostIds || []).find((id) => !players.includes(id)) || null;
+
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 if (typeof module !== 'undefined') module.exports = SG;

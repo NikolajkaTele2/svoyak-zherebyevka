@@ -199,6 +199,36 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .dot.warn { background: var(--warn); }
 .syncnote .linkbtn { padding: 0; font-size: 13px; color: var(--ink); }
 .newdlg { background: var(--surface); border-color: var(--focus); }
+/* площадки и ведущие */
+.vnames { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.vnames input { width: 100%; }
+.vnote { font-size: 13px; margin: 0; }
+.vnote.ok { color: var(--good); }
+.vnote.warn { color: var(--warn); }
+.vnote.muted { color: var(--muted); }
+.vplan { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+.vplan > span { background: var(--surface-2); border-radius: 6px; padding: 3px 8px; }
+.hlist { margin: 0; padding: 0; list-style: none; display: grid; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.hrow { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 8px 5px 12px; border-bottom: 1px solid var(--line); }
+.hrow:last-child { border-bottom: 0; }
+.hrank { color: var(--muted); font-size: 12px; text-align: right; }
+.hname { overflow-wrap: anywhere; }
+.hbtns { display: flex; gap: 2px; }
+.iconbtn { appearance: none; border: 1px solid transparent; background: none; border-radius: 6px; width: 28px; height: 28px; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; }
+.iconbtn:hover:not(:disabled) { border-color: var(--line); color: var(--ink); background: var(--surface-2); }
+.iconbtn:disabled { opacity: .3; cursor: default; }
+.chip.ven { background: var(--board); color: var(--gold-board); }
+.hostline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 14px 10px; border-top: 1px dashed var(--line); font-size: 13px; }
+.hostline .lab { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+.hostline select { flex: 1 1 160px; min-width: 0; padding: 5px 8px; font-size: 13px; }
+.hostline.none .lab { color: var(--warn); }
+.vbar { gap: 8px 16px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { appearance: none; border: 0; background: var(--surface); padding: 6px 12px; font-weight: 600; font-size: 13px; cursor: pointer; color: var(--muted); }
+.seg button.on { background: var(--board); color: var(--board-ink); }
+.vgroup { display: grid; gap: 10px; }
+.vgroup h3 { font-family: var(--font-display); font-weight: 400; font-size: 18px; display: flex; gap: 10px; align-items: baseline; }
+.vgroup h3 .muted { font-family: var(--font-body); font-size: 13px; }
 .flist td.name { min-width: 180px; }
 .flist tr.cur td { background: color-mix(in srgb, var(--good) 10%, transparent); }
 
@@ -548,9 +578,116 @@ const SG = (() => {
     return out;
   }
 
+  /* ---------- Площадки и ведущие ---------- */
+
+  /* Бои раздаются по площадкам по кругу: при 5 площадках бои 1 и 6 — на 1-й, 2 и 7 — на 2-й и т. д.
+     slot — какой по счёту этот бой на своей площадке. */
+  function venuePlan(m, cfg) {
+    const V = cfg && cfg.count ? Math.max(1, Math.min(10, cfg.count | 0)) : 0;
+    if (!V) return null;
+    return Array.from({ length: m }, (_, i) => ({ venue: i % V, slot: Math.floor(i / V) + 1 }));
+  }
+
+  /* Сводка по раскладке: сколько мест, где лишние бои, где бой один (некому вести). */
+  function venueCheck(m, cfg) {
+    const plan = venuePlan(m, cfg);
+    if (!plan) return null;
+    const V = cfg.count, K = cfg.perVenue || 1;
+    const per = Array(V).fill(0);
+    plan.forEach((p) => per[p.venue]++);
+    return { V, K, slots: V * K, battles: m, per, over: per.map((n, i) => (n > K ? i : -1)).filter((i) => i >= 0), single: per.map((n, i) => (n === 1 ? i : -1)).filter((i) => i >= 0), empty: per.map((n, i) => (n === 0 ? i : -1)).filter((i) => i >= 0) };
+  }
+
+  function venueGroups(battles) {
+    const g = new Map();
+    battles.forEach((b, i) => {
+      if (b.venue === null || b.venue === undefined) return;
+      if (!g.has(b.venue)) g.set(b.venue, []);
+      g.get(b.venue).push(i);
+    });
+    for (const idxs of g.values()) idxs.sort((x, y) => (battles[x].slot || 0) - (battles[y].slot || 0) || x - y);
+    return g;
+  }
+
+  /* Кто может вести бой bi: участники других боёв той же площадки в этом туре. */
+  function hostCandidates(battles, bi, hostIds) {
+    const b = battles[bi];
+    const rank = new Map((hostIds || []).map((id, i) => [id, i]));
+    const out = [];
+    if (!b || b.venue === null || b.venue === undefined) return out;
+    battles.forEach((o, oi) => {
+      if (oi === bi || o.venue !== b.venue) return;
+      o.players.forEach((id) => out.push({ id, battle: oi, rank: rank.has(id) ? rank.get(id) : null }));
+    });
+    return out.sort((a, c) => (a.rank === null ? 1e9 : a.rank) - (c.rank === null ? 1e9 : c.rank) || a.battle - c.battle);
+  }
+
+  const lessKey = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+
+  /* Назначить ведущих. На каждой площадке: один человек ведёт не больше одного боя за тур;
+     сначала стараемся закрыть ведущими все бои, затем берём тех, кто выше в списке ведущих.
+     Назначенные вручную (hostManual) сохраняются, если всё ещё допустимы. */
+  function assignHosts(battles, hostIds) {
+    const rank = new Map((hostIds || []).map((id, i) => [id, i]));
+    battles.forEach((b) => { if (b.venue === null || b.venue === undefined) { b.host = null; b.hostManual = false; } });
+    for (const idxs of venueGroups(battles).values()) {
+      const used = new Set();
+      const free = [];
+      for (const i of idxs) {
+        const b = battles[i];
+        if (b.hostManual) {
+          const ok = b.host === null || (!b.players.includes(b.host) && !used.has(b.host) && idxs.some((j) => j !== i && battles[j].players.includes(b.host)));
+          if (ok) { if (b.host) used.add(b.host); continue; }
+          b.hostManual = false;
+        }
+        free.push(i);
+      }
+      const cands = free.map((i) => {
+        const list = [];
+        for (const j of idxs) if (j !== i) for (const p of battles[j].players) if (rank.has(p) && !used.has(p)) list.push(p);
+        return list.sort((a, c) => rank.get(a) - rank.get(c)).slice(0, 8);
+      });
+      let best = null;
+      if (free.length <= 5) {
+        const pick = [], taken = new Set();
+        (function dfs(k) {
+          if (k === free.length) {
+            const covered = pick.filter(Boolean).length;
+            const key = [-covered, pick.reduce((s, p) => s + (p ? rank.get(p) : 0), 0), ...pick.map((p) => (p ? rank.get(p) : 1e9))];
+            if (!best || lessKey(key, best.key)) best = { key, pick: pick.slice() };
+            return;
+          }
+          for (const p of cands[k]) if (!taken.has(p)) { taken.add(p); pick.push(p); dfs(k + 1); pick.pop(); taken.delete(p); }
+          pick.push(null); dfs(k + 1); pick.pop();
+        })(0);
+      } else {
+        // много боёв на одной площадке — жадно по порядку
+        const taken = new Set();
+        best = { pick: cands.map((list) => { const p = list.find((x) => !taken.has(x)) || null; if (p) taken.add(p); return p; }) };
+      }
+      free.forEach((i, k) => { battles[i].host = best.pick[k] || null; battles[i].hostManual = false; });
+    }
+    return battles;
+  }
+
+  /* Разложить тур по площадкам и назначить ведущих (ручные назначения сбрасываются). */
+  function placeTour(tour, cfg, hostIds) {
+    const plan = venuePlan(tour.battles.length, cfg);
+    tour.battles.forEach((b, i) => {
+      b.venue = plan ? plan[i].venue : null;
+      b.slot = plan ? plan[i].slot : null;
+      b.host = null; b.hostManual = false;
+    });
+    if (plan) assignHosts(tour.battles, hostIds);
+    return tour;
+  }
+
+  /* Ведущий финала: первый в списке ведущих, кто не играет в финале. */
+  const finalHost = (players, hostIds) => (hostIds || []).find((id) => !players.includes(id)) || null;
+
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 
 </script>
@@ -564,7 +701,16 @@ const SG = (() => {
 
   /* ---------- состояние ---------- */
   const newId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  const emptyState = () => ({ v: 1, id: newId(), savedAt: Date.now(), name: 'Своя игра', example: false, settings: { seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, players: [], tours: [], final: null });
+  /* Дополнить состояние полями новых версий (старые файлы турниров открываются без ошибок). */
+  function normalize(s) {
+    s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, s.settings || {});
+    s.settings.venues = Object.assign({ count: 0, perVenue: 2, names: [] }, s.settings.venues || {});
+    if (!Array.isArray(s.settings.venues.names)) s.settings.venues.names = [];
+    if (!Array.isArray(s.hosts)) s.hosts = [];
+    s.final = s.final || null;
+    return s;
+  }
+  const emptyState = () => normalize({ v: 1, id: newId(), savedAt: Date.now(), name: 'Своя игра', example: false, players: [], tours: [], final: null });
 
   function makeDemo() {
     const first = ['Анна', 'Борис', 'Вера', 'Глеб', 'Дарья', 'Егор', 'Жанна', 'Илья', 'Ксения', 'Лев', 'Мария', 'Никита', 'Ольга', 'Павел', 'Роман', 'Софья', 'Тимур', 'Ульяна', 'Фёдор', 'Юлия', 'Ярослав', 'Алина', 'Денис', 'Елена', 'Кирилл', 'Лидия', 'Максим', 'Нина', 'Олег', 'Полина', 'Степан'];
@@ -581,15 +727,17 @@ const SG = (() => {
       const f = first[i], l = last[(i * 7) % 31];
       st.players.push({ id: 'd' + i, name: (fem.has(f) ? l + 'а' : l) + ' ' + f, rating: 1000 + Math.round(r() * 900) });
     }
+    st.settings.venues = { count: 5, perVenue: 2, names: ['Альфа', 'Бета', 'Гамма', 'Дельта', 'Эпсилон'] };
+    st.hosts = ['d3', 'd12', 'd7', 'd20', 'd1', 'd25', 'd16', 'd9', 'd28', 'd5', 'd14', 'd22'];
     for (let t = 0; t < 2; t++) {
       const d = SG.drawNext(st);
       d.battles.forEach((b) => b.players.forEach((id) => {
         const p = st.players.find((x) => x.id === id);
         b.scores[id] = Math.round((p.rating - 1000) / 90 + r() * 30 - 10) * 10;
       }));
-      st.tours.push({ battles: d.battles });
+      st.tours.push(SG.placeTour({ battles: d.battles }, st.settings.venues, st.hosts));
     }
-    st.tours.push({ battles: SG.drawNext(st).battles });
+    st.tours.push(SG.placeTour({ battles: SG.drawNext(st).battles }, st.settings.venues, st.hosts));
     return st;
   }
 
@@ -598,6 +746,11 @@ const SG = (() => {
   try { Object.assign(ui, JSON.parse(localStorage.getItem(LS_UI) || '{}'), { swap: false, sel: null, confirm: null, copyText: null }); } catch (e) {}
   try { const raw = localStorage.getItem(LS_KEY); if (raw) state = JSON.parse(raw); } catch (e) {}
   if (!state) state = makeDemo();
+  normalize(state);
+
+  const venCfg = () => state.settings.venues;
+  const hostIds = () => { const ids = new Set(state.players.map((p) => p.id)); return (state.hosts || []).filter((id) => ids.has(id)); };
+  const venueName = (i) => ((state.settings.venues.names || [])[i] || '').trim() || 'Площадка ' + (i + 1);
 
   /* ---------- хранение: общий db артефакта, иначе браузер ---------- */
   const store = { mode: 'local', canWrite: true, doc: null, lastJson: null, timer: null, writing: false, again: false, dirty: false };
@@ -732,7 +885,7 @@ const SG = (() => {
   })();
   addEventListener('pagehide', () => { if (fsync.timer) writeNow(); });
 
-  function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen })); } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen, vview: ui.vview })); } catch (e) {} }
   function persistLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
   function save(immediate) {
     if (!state.id) state.id = newId();
@@ -835,7 +988,7 @@ const SG = (() => {
   function drawTour() {
     try {
       const d = SG.drawNext(state);
-      state.tours.push({ battles: d.battles });
+      state.tours.push(SG.placeTour({ battles: d.battles }, venCfg(), hostIds()));
       save(true);
       ui.tab = 't' + (state.tours.length - 1); saveUi();
       render();
@@ -853,7 +1006,7 @@ const SG = (() => {
   function makeFinal() {
     const st = SG.standings(state, 4);
     const ids = st.slice(0, 3).map((r) => r.id);
-    state.final = { players: ids, scores: Object.fromEntries(ids.map((id) => [id, null])) };
+    state.final = { players: ids, scores: Object.fromEntries(ids.map((id) => [id, null])), host: SG.finalHost(ids, hostIds()), hostManual: false };
     save(true); render();
   }
 
@@ -998,6 +1151,8 @@ const SG = (() => {
           ${n >= 6 ? `<p class="muted" style="font-size:13px">${evenNote(n)}</p>` : ''}
           ${canDraw ? '<div><button class="btn primary big" data-act="draw">Жеребьёвка 1 тура</button></div>' : ''}
         </section>
+        ${venuesPanel()}
+        ${hostsPanel()}
         <section class="panel">
           <h2>Настройки</h2>
           <div class="field"><span class="lab">Посев первого тура по рейтингу</span>
@@ -1011,6 +1166,58 @@ const SG = (() => {
         ${filesPanel()}
       </div>
     </div>`;
+  }
+
+  function venueList(idxs) { return idxs.map(venueName).map((x) => '«' + esc(x) + '»').join(', '); }
+
+  function venuesPanel() {
+    const vc = venCfg(), ed = canEdit() ? '' : 'disabled';
+    const sizes = SG.sizesFor(state, state.players.length);
+    const M = sizes ? sizes.length : 0;
+    let body = '';
+    if (vc.count) {
+      const names = Array.from({ length: vc.count }, (_, i) => `<input type="text" id="vn-${i}" data-vname="${i}" maxlength="15" value="${esc((vc.names || [])[i] || '')}" placeholder="Площадка ${i + 1}" aria-label="Название площадки ${i + 1}" ${ed}>`).join('');
+      body += `<div class="field"><span class="lab">Названия площадок (до 15 символов)</span><div class="vnames">${names}</div></div>`;
+      if (M) {
+        const c = SG.venueCheck(M, vc);
+        const notes = [];
+        if (c.slots === M) notes.push(['ok', 'Все места заняты.']);
+        if (c.over.length) notes.push(['warn', 'Мест меньше, чем боёв: на ' + (c.over.length === 1 ? 'площадке ' : 'площадках ') + venueList(c.over) + ' будет больше ' + c.K + ' ' + plural(c.K, 'боя', 'боёв', 'боёв') + '.']);
+        else if (c.slots > M) notes.push(['muted', 'Свободных мест: ' + (c.slots - M) + '.']);
+        if (c.single.length) notes.push(['warn', 'На ' + (c.single.length === 1 ? 'площадке ' : 'площадках ') + venueList(c.single) + ' по одному бою — ведущих из отдыхающих там не будет.']);
+        if (c.empty.length) notes.push(['warn', (c.empty.length === 1 ? 'Площадка ' : 'Площадки ') + venueList(c.empty) + ' останутся без боёв.']);
+        const groups = Array.from({ length: c.V }, () => []);
+        SG.venuePlan(M, vc).forEach((p, i) => groups[p.venue].push(i + 1));
+        body += `<div id="vcheck" style="display:grid;gap:8px"><p>Боёв в туре: <b class="num">${M}</b>. Мест: <span class="num">${c.V} × ${c.K} = ${c.slots}</span>.</p>
+          ${notes.map(([k, t]) => `<p class="vnote ${k}">${t}</p>`).join('')}
+          <div class="vplan">${groups.map((g, i) => `<span><b>${esc(venueName(i))}</b> <span class="num">${g.length ? 'бои ' + g.join(', ') : '—'}</span></span>`).join('')}</div></div>`;
+      } else body += '<p class="muted">Добавьте участников, и здесь появится раскладка боёв по площадкам.</p>';
+      if (state.tours.length) body += '<p class="muted" style="font-size:13px">Изменения применятся к следующей жеребьёвке. Чтобы разложить текущий тур заново, откройте его и нажмите «Разложить заново по площадкам».</p>';
+    }
+    return `<section class="panel">
+      <h2>Площадки</h2>
+      <div class="row">
+        <div class="field"><label for="vcount">Количество площадок</label><select id="vcount" ${ed}><option value="0"${vc.count ? '' : ' selected'}>Не распределять</option>${Array.from({ length: 10 }, (_, i) => `<option value="${i + 1}"${vc.count === i + 1 ? ' selected' : ''}>${i + 1}</option>`).join('')}</select></div>
+        ${vc.count ? `<div class="field"><label for="vper">Боёв на площадке</label><select id="vper" ${ed}>${[1, 2, 3, 4].map((k) => `<option value="${k}"${vc.perVenue === k ? ' selected' : ''}>${k}</option>`).join('')}</select></div>` : ''}
+      </div>
+      ${vc.count ? '<p class="muted" style="font-size:13px">Бои раздаются по площадкам по кругу: при 5 площадках бои 1 и 6 — на первой, 2 и 7 — на второй и так далее.</p>' : ''}
+      ${body}
+    </section>`;
+  }
+
+  function hostsPanel() {
+    const pl = byId(), hs = hostIds(), ed = canEdit();
+    const rows = hs.map((id, i) => `<li class="hrow"><span class="num hrank">${i + 1}</span><span class="hname">${esc(pl[id].name)}</span>${ed ? `<span class="hbtns"><button class="iconbtn" data-hmove="${i}:-1" aria-label="Выше" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" data-hmove="${i}:1" aria-label="Ниже" ${i < hs.length - 1 ? '' : 'disabled'}>↓</button><button class="iconbtn" data-hdel="${i}" aria-label="Убрать ${esc(pl[id].name)}">✕</button></span>` : ''}</li>`).join('');
+    const inList = new Set(hs);
+    const rest = state.players.filter((p) => !inList.has(p.id)).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    return `<section class="panel">
+      <div class="row spread"><h2>Ведущие</h2><span class="muted num">${hs.length}</span></div>
+      <p class="muted">Ведущий боя — участник с той же площадки, который в этом бою отдыхает. Чем выше в списке, тем выше приоритет: из нескольких подходящих выбирается тот, кто выше. Один человек ведёт не больше одного боя за тур.</p>
+      ${hs.length ? `<ol class="hlist">${rows}</ol>` : '<p class="muted">Список пуст.</p>'}
+      ${ed && rest.length ? `<div class="row"><select id="hostadd" aria-label="Участник"><option value="">Выберите участника…</option>${rest.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn" data-act="host-add">Добавить</button><button class="linkbtn" data-act="host-bulk-toggle">Вставить списком</button></div>` : ''}
+      ${ed && ui.hostBulk ? `<div class="field"><label for="hostbulk">Имена по одному в строке, в порядке приоритета. Имена должны совпадать со списком участников.</label><textarea id="hostbulk" style="min-height:110px"></textarea><div class="row"><button class="btn" data-act="host-bulk-do">Добавить в конец списка</button></div></div>` : ''}
+      ${!venCfg().count && hs.length ? '<p class="vnote warn">Ведущие назначаются, только когда включены площадки.</p>' : ''}
+    </section>`;
   }
 
   function filesPanel() {
@@ -1066,7 +1273,25 @@ const SG = (() => {
     const f = filled(tour), total = tour.battles.length;
     const done = f === total;
 
-    const cards = tour.battles.map((b, bi) => {
+    const hs = hostIds();
+    const hasVenues = tour.battles.some((b) => b.venue !== null && b.venue !== undefined);
+    const hostLine = (b, bi) => {
+      if (b.venue === null || b.venue === undefined) return '';
+      const cands = SG.hostCandidates(tour.battles, bi, hs);
+      const from = (id) => { const c = cands.find((x) => x.id === id); return c ? 'бой ' + (c.battle + 1) : ''; };
+      if (!canEdit()) {
+        return `<div class="hostline${b.host ? '' : ' none'}"><span class="lab">Ведущий</span><span>${b.host ? esc(players[b.host].name) + ' <small class="muted">' + from(b.host) + '</small>' : 'не назначен'}</span></div>`;
+      }
+      const opt = (c) => `<option value="${c.id}"${c.id === b.host ? ' selected' : ''}>${esc(players[c.id].name)} · бой ${c.battle + 1}${c.rank !== null ? ' · №' + (c.rank + 1) : ''}</option>`;
+      const listed = cands.filter((c) => c.rank !== null), others = cands.filter((c) => c.rank === null);
+      const sel = `<select id="h-${t}-${bi}" data-host="${t}:${bi}" aria-label="Ведущий боя ${bi + 1}">
+        <option value=""${b.host ? '' : ' selected'}>${cands.length ? '— не назначен —' : 'некому вести'}</option>
+        ${listed.length ? `<optgroup label="Из списка ведущих">${listed.map(opt).join('')}</optgroup>` : ''}
+        ${others.length ? `<optgroup label="Другие отдыхающие на площадке">${others.map(opt).join('')}</optgroup>` : ''}
+      </select>`;
+      return `<div class="hostline${b.host ? '' : ' none'}"><label class="lab" for="h-${t}-${bi}">Ведущий</label>${sel}${b.hostManual ? '<small class="muted">вручную</small>' : ''}</div>`;
+    };
+    const cardHtml = tour.battles.map((b, bi) => {
       const res = SG.battleResult(b);
       const rep = reps.filter((r) => r.battle === bi);
       const rows = b.players.map((id) => {
@@ -1083,9 +1308,15 @@ const SG = (() => {
       }).join('');
       const note = rep.length ? `<div class="bnote">Повторная встреча: ${rep.map((r) => esc(players[r.a].name) + ' — ' + esc(players[r.b].name)).join('; ')}</div>` : '';
       return `<article class="battle${res ? ' ok' : ''}${rep.length ? ' rep' : ''}" id="b-${t}-${bi}">
-        <div class="bh"><span class="t">Бой ${bi + 1}</span><span class="row" style="gap:6px"><span class="chip${b.players.length === 4 ? ' four' : ''}">${b.players.length} уч.</span><span class="chip okc" id="bk-${t}-${bi}" ${res ? '' : 'hidden'}>готово</span></span></div>
-        ${rows}${note}</article>`;
-    }).join('');
+        <div class="bh"><span class="t">Бой ${bi + 1}</span><span class="row" style="gap:6px">${b.venue !== null && b.venue !== undefined ? `<span class="chip ven" title="${b.slot}-й бой на площадке">${esc(venueName(b.venue))} · ${b.slot}</span>` : ''}<span class="chip${b.players.length === 4 ? ' four' : ''}">${b.players.length} уч.</span><span class="chip okc" id="bk-${t}-${bi}" ${res ? '' : 'hidden'}>готово</span></span></div>
+        ${rows}${hostLine(b, bi)}${note}</article>`;
+    });
+    let cards;
+    if (hasVenues && ui.vview === 'venues') {
+      const groups = [...SG.venueGroups(tour.battles).entries()].sort((a, b) => a[0] - b[0]);
+      cards = groups.map(([v, idxs]) => `<section class="vgroup"><h3>${esc(venueName(v))} <span class="muted num">${idxs.length} ${plural(idxs.length, 'бой', 'боя', 'боёв')}</span></h3><div class="battles">${idxs.map((i) => cardHtml[i]).join('')}</div></section>`).join('');
+    } else cards = `<div class="battles">${cardHtml.join('')}</div>`;
+    const missing = hasVenues ? tour.battles.filter((b) => b.venue !== null && b.venue !== undefined && !b.host).length : 0;
 
     let tools = '';
     if (canEdit()) {
@@ -1110,10 +1341,28 @@ const SG = (() => {
         ${ui.swap ? '<div class="banner"><p>Нажмите на участника, затем на участника из другого боя — они поменяются местами. Если появится повторная встреча, бой подсветится.</p></div>' : ''}
         ${reps.length && !ui.swap ? `<div class="banner warn"><p>В этом туре ${reps.length} ${plural(reps.length, 'повторная встреча', 'повторные встречи', 'повторных встреч')}. Бои отмечены рамкой.</p></div>` : ''}
         ${!isLast && canEdit() ? '<p class="muted">Исправление результатов этого тура пересчитает таблицу, но не изменит уже проведённую жеребьёвку следующих туров.</p>' : ''}
+        ${hasVenues || (venCfg().count && canEdit() && isLast) ? `<div class="row spread vbar">
+          ${hasVenues ? `<div class="seg" role="group" aria-label="Вид"><button class="${ui.vview === 'venues' ? '' : 'on'}" data-act="vview" data-v="battles">По боям</button><button class="${ui.vview === 'venues' ? 'on' : ''}" data-act="vview" data-v="venues">По площадкам</button></div>` : '<span class="muted">Тур разыгран без площадок.</span>'}
+          ${canEdit() ? `<div class="row">${hasVenues ? '<button class="linkbtn" data-act="re-host" data-t="' + t + '">Пересчитать ведущих</button>' : ''}${isLast && !anyScore(tour) && venCfg().count ? '<button class="linkbtn" data-act="re-place" data-t="' + t + '">Разложить заново по площадкам</button>' : ''}</div>` : ''}
+        </div>` : ''}
+        ${missing ? `<p class="vnote warn">Без ведущего: ${missing} ${plural(missing, 'бой', 'боя', 'боёв')}. Выберите ведущего в карточке боя или добавьте людей в список ведущих.</p>` : ''}
         <div class="legend">${t ? '<span>Слева — место в таблице перед туром и очки</span>' : '<span>Посев по рейтингу</span>'}<span>Очки за бой: 3 участника — 2 · 1 · 0; 4 участника — 2 · 1 · 0,5 · 0; при равных баллах очки делятся</span></div>
-        <div class="battles">${cards}</div>
+        ${cards}
         ${next}
       </section>`;
+  }
+
+  function finalHostLine(b, players) {
+    const hs = hostIds();
+    if (!hs.length && !b.host) return '';
+    if (!canEdit()) return `<div class="hostline${b.host ? '' : ' none'}"><span class="lab">Ведущий</span><span>${b.host ? esc(players[b.host].name) : 'не назначен'}</span></div>`;
+    const listed = hs.filter((id) => !b.players.includes(id));
+    const others = state.players.filter((p) => !b.players.includes(p.id) && !hs.includes(p.id)).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
+    return `<div class="hostline${b.host ? '' : ' none'}"><label class="lab" for="fhost">Ведущий</label><select id="fhost" data-fhost="1">
+      <option value=""${b.host ? '' : ' selected'}>— не назначен —</option>
+      ${listed.length ? `<optgroup label="Из списка ведущих">${listed.map((id) => `<option value="${id}"${id === b.host ? ' selected' : ''}>${esc(players[id].name)} · №${hs.indexOf(id) + 1}</option>`).join('')}</optgroup>` : ''}
+      ${others.length ? `<optgroup label="Другие участники">${others.map((p) => `<option value="${p.id}"${p.id === b.host ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</optgroup>` : ''}
+    </select></div>`;
   }
 
   function viewFinal() {
@@ -1148,7 +1397,7 @@ const SG = (() => {
       <div style="display:grid;gap:2px"><span class="eyebrow">Финал</span><h2>Финальный бой</h2></div>
       ${changed && canEdit() ? '<div class="banner warn"><p>После формирования финала результаты отбора изменились, и тройка лучших теперь другая.</p><button class="btn" data-act="make-final">Пересобрать финал</button></div>' : ''}
       ${tbNote}
-      <div class="battles"><article class="battle${res ? ' ok' : ''}"><div class="bh"><span class="t">Финал</span><span class="chip">3 уч.</span></div>${rows}</article></div>
+      <div class="battles"><article class="battle${res ? ' ok' : ''}"><div class="bh"><span class="t">Финал</span><span class="chip">3 уч.</span></div>${rows}${finalHostLine(b, players)}</article></div>
       ${podium}
       <p class="muted">Места в финале определяются по баллам финального боя. Остальные места — по таблице отборочных туров, начиная с 4-го.</p>
     </section>`;
@@ -1205,7 +1454,10 @@ const SG = (() => {
       <p>Так лидеры с лидерами встречаются уже со второго тура, и тройка финалистов определяется точнее.</p></section>
       <section><h3>5. Почему повторов не бывает</h3>
       <p>Перед 4-м туром у участника не больше 9 бывших соперников, а всего в турнире 25–48 человек. Свободных соперников остаётся с запасом. Мы проверили алгоритм на 3600 смоделированных турнирах от 25 до 48 участников: повторных встреч не было ни разу. Если всё же возникнет повтор, приложение предупредит и подсветит бой.</p></section>
-      <section><h3>6. Равенство очков и финал</h3>
+      <section><h3>6. Площадки и ведущие</h3>
+      <p>Оператор задаёт число площадок (1–10), сколько боёв проходит на одной площадке (1–4) и их названия. Бои раздаются по площадкам по кругу: при 10 боях и 5 площадках на первой идут бои 1 и 6, на второй — 2 и 7 и так далее. Так нагрузка распределяется поровну. Если мест меньше, чем боёв, приложение предупредит.</p>
+      <p>Ведущий боя — участник с той же площадки, который в этом бою отдыхает: бой 1 на первой площадке ведёт кто-то из боя 6, а бой 6 — кто-то из боя 1. Из подходящих выбирается тот, кто выше в списке ведущих. Один человек ведёт не больше одного боя за тур, и сначала приложение старается, чтобы ведущий был у каждого боя. Ведущего можно заменить вручную в карточке боя. Ведущий финала — первый из списка, кто не играет в финале.</p></section>
+      <section><h3>7. Равенство очков и финал</h3>
       <p>При равных очках по умолчанию сравниваются: сила соперников (средние очки всех, с кем играл), сумма баллов, рейтинг. Порядок можно поменять на вкладке «Участники». В финал выходят три лучших участника таблицы после 4-го тура.</p></section>
     </article>`;
   }
@@ -1243,8 +1495,22 @@ const SG = (() => {
     } else if (el.id === 'tname') {
       state.name = el.value || 'Своя игра'; save();
       const h = document.querySelector('h1'); if (h) h.textContent = state.name;
+    } else if (el.dataset.vname !== undefined) {
+      const v = venCfg(), i = Number(el.dataset.vname);
+      while (v.names.length <= i) v.names.push('');
+      v.names[i] = el.value.slice(0, 15); save();
+      refreshVenueCheck();
     }
   });
+  /* Обновить только раскладку под полями названий, не трогая сами поля (иначе теряется ввод). */
+  function refreshVenueCheck() {
+    const cur = document.getElementById('vcheck');
+    if (!cur) return;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = venuesPanel();
+    const fresh = tmp.querySelector('#vcheck');
+    if (fresh) cur.innerHTML = fresh.innerHTML;
+  }
   app.addEventListener('change', (e) => {
     const el = e.target;
     if (el.dataset.pname) { const p = state.players.find((x) => x.id === el.dataset.pname); if (p) { p.name = el.value.trim() || p.name; save(); } }
@@ -1255,6 +1521,18 @@ const SG = (() => {
       tb[i] = val; save(); render();
     } else if (el.name === 'seed1') { state.settings.seed1 = el.value; save(); }
     else if (el.id === 'evenb') { state.settings.evenBattles = el.checked; save(); render(); }
+    else if (el.id === 'vcount') { venCfg().count = Number(el.value) || 0; save(); render(); }
+    else if (el.id === 'vper') { venCfg().perVenue = Number(el.value) || 1; save(); render(); }
+    else if (el.dataset.vname !== undefined) { refreshVenueCheck(); }
+    else if (el.dataset.host) {
+      const [t, bi] = el.dataset.host.split(':').map(Number);
+      const b = state.tours[t].battles[bi];
+      b.host = el.value || null; b.hostManual = true;
+      SG.assignHosts(state.tours[t].battles, hostIds());
+      save(); render();
+    } else if (el.dataset.fhost) {
+      state.final.host = el.value || null; state.final.hostManual = true; save(); render();
+    }
     else if (el.dataset.fscore) { render(); }
     else if (el.dataset.score) { setTimeout(render, 0); } // после перехода фокуса: показать кнопку следующего тура и т.п.
     else if (el.id === 'openfile' && el.files && el.files[0]) {
@@ -1276,9 +1554,7 @@ const SG = (() => {
     try {
       const s = JSON.parse(text);
       if (!s || !Array.isArray(s.players) || !Array.isArray(s.tours)) return null;
-      s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, s.settings || {});
-      s.final = s.final || null;
-      return s;
+      return normalize(s);
     } catch (e) { return null; }
   }
   /* Открыть турнир из внешнего файла или текста. okP — результат ensureFolder(), начатый в обработчике клика. */
@@ -1416,12 +1692,26 @@ const SG = (() => {
         A.players[ia] = id; B.players[ib] = ui.sel.id;
         A.scores = Object.fromEntries(A.players.map((x) => [x, null]));
         B.scores = Object.fromEntries(B.players.map((x) => [x, null]));
+        SG.assignHosts(state.tours[t].battles, hostIds()); // состав площадок изменился — ведущие тоже
         ui.sel = null; save(true);
       }
       return render();
     }
     const del = e.target.closest('[data-del]');
-    if (del) { state.players = state.players.filter((p) => p.id !== del.dataset.del); save(); return render(); }
+    if (del) { state.players = state.players.filter((p) => p.id !== del.dataset.del); state.hosts = state.hosts.filter((id) => id !== del.dataset.del); save(); return render(); }
+    const hm = e.target.closest('[data-hmove]');
+    if (hm) {
+      const [i, d] = hm.dataset.hmove.split(':').map(Number);
+      const hs = hostIds(), j = i + d;
+      if (j < 0 || j >= hs.length) return;
+      [hs[i], hs[j]] = [hs[j], hs[i]];
+      state.hosts = hs; save(); render();
+      const again = document.querySelector(`[data-hmove="${j}:${d}"]`) || document.querySelector(`[data-hmove="${j}:${-d}"]`);
+      if (again) again.focus();
+      return;
+    }
+    const hd = e.target.closest('[data-hdel]');
+    if (hd) { const hs = hostIds(); hs.splice(Number(hd.dataset.hdel), 1); state.hosts = hs; save(); return render(); }
     const a = e.target.closest('[data-act]');
     if (!a) return;
     const act = a.dataset.act;
@@ -1458,16 +1748,65 @@ const SG = (() => {
     if (act === 'to-final') return setTab('final');
     if (act === 'make-final') return makeFinal();
     if (act === 'import-toggle') { ui.importOpen = !ui.importOpen; saveUi(); return render(); }
+    if (act === 'host-add') {
+      const id = document.getElementById('hostadd').value;
+      if (!id) return toast('Выберите участника');
+      state.hosts = hostIds().concat(id); save(); render();
+      const s = document.getElementById('hostadd'); if (s) s.focus();
+      return;
+    }
+    if (act === 'host-bulk-toggle') { ui.hostBulk = !ui.hostBulk; render(); const ta = document.getElementById('hostbulk'); if (ta) ta.focus(); return; }
+    if (act === 'host-bulk-do') {
+      const norm = (x) => x.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+      const byName = new Map(state.players.map((p) => [norm(p.name), p.id]));
+      const hs = hostIds(), missed = [];
+      let added = 0;
+      document.getElementById('hostbulk').value.split(/\r?\n/).forEach((line) => {
+        let s = line.trim().replace(/^\d+[.)]\s+/, '');
+        if (!s) return;
+        let id = byName.get(norm(s));
+        if (!id) { const m = s.match(/^(.*?)[\s;,\t]+-?\d+(?:[.,]\d+)?\s*$/); if (m) id = byName.get(norm(m[1])); } // имя с рейтингом в конце
+        if (!id) return missed.push(s);
+        if (!hs.includes(id)) { hs.push(id); added++; }
+      });
+      state.hosts = hs; save();
+      if (!missed.length) ui.hostBulk = false;
+      render();
+      if (!missed.length) return toast('Добавлено ведущих: ' + added);
+      const ta = document.getElementById('hostbulk'); if (ta) ta.value = missed.join('\n');
+      return toast('Добавлено: ' + added + '. Не найдены в списке участников (оставлены в поле): ' + missed.length);
+    }
+    if (act === 'vview') { ui.vview = a.dataset.v; saveUi(); return render(); }
+    if (act === 're-host') {
+      const tr = state.tours[Number(a.dataset.t)];
+      tr.battles.forEach((b) => { b.hostManual = false; });
+      SG.assignHosts(tr.battles, hostIds()); save(true); render();
+      return toast('Ведущие назначены заново по списку');
+    }
+    if (act === 're-place') {
+      SG.placeTour(state.tours[Number(a.dataset.t)], venCfg(), hostIds()); save(true); render();
+      return toast('Тур разложен по площадкам заново');
+    }
     if (act === 'add-one') { state.players.push({ id: uid(), name: 'Участник ' + (state.players.length + 1), rating: 0 }); state.example = false; save(); return render(); }
     if (act === 'bulk-add' || act === 'bulk-replace') {
       const list = parseList(document.getElementById('bulk').value);
       if (!list.length) return toast('Вставьте хотя бы одну строку');
-      if (act === 'bulk-replace') state.players = list; else state.players = state.players.concat(list);
+      if (act === 'bulk-replace') {
+        // сохранить список ведущих: сопоставить по именам с новым списком
+        const oldNames = hostIds().map((id) => state.players.find((p) => p.id === id).name);
+        state.players = list;
+        state.hosts = oldNames.map((n) => (list.find((p) => p.name === n) || {}).id).filter(Boolean);
+      } else state.players = state.players.concat(list);
       state.example = false; save(true); render(); return toast('Добавлено: ' + list.length);
     }
     if (act === 'copy-tour') {
-      const t = Number(a.dataset.t), pl = byId();
-      const txt = state.name + ' — тур ' + (t + 1) + '\n' + state.tours[t].battles.map((b, i) => 'Бой ' + (i + 1) + ': ' + b.players.map((id) => pl[id].name).join(', ')).join('\n');
+      const t = Number(a.dataset.t), pl = byId(), bs = state.tours[t].battles;
+      const line = (b, i) => 'Бой ' + (i + 1) + ': ' + b.players.map((id) => pl[id].name).join(', ') + (b.venue !== null && b.venue !== undefined ? '. Ведущий: ' + (b.host ? pl[b.host].name : '—') : '');
+      let txt = state.name + ' — тур ' + (t + 1) + '\n';
+      if (bs.some((b) => b.venue !== null && b.venue !== undefined)) {
+        txt += [...SG.venueGroups(bs).entries()].sort((x, y) => x[0] - y[0])
+          .map(([v, idxs]) => '\n' + venueName(v) + '\n' + idxs.map((i) => '  ' + line(bs[i], i)).join('\n')).join('\n');
+      } else txt += bs.map(line).join('\n');
       return copy(txt, 'Состав тура скопирован');
     }
     if (act === 'copy-table') {
