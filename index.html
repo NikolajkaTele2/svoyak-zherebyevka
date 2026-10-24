@@ -202,6 +202,11 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .syncnote { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
 .dot.on { background: var(--good); }
+.dot.warn { background: var(--warn); }
+.syncnote .linkbtn { padding: 0; font-size: 13px; color: var(--ink); }
+.newdlg { background: var(--surface); border-color: var(--focus); }
+.flist td.name { min-width: 180px; }
+.flist tr.cur td { background: color-mix(in srgb, var(--good) 10%, transparent); }
 
 /* Табло этапов */
 .boardwrap { overflow-x: auto; border-radius: 12px; }
@@ -564,7 +569,8 @@ const SG = (() => {
   const LS_UI = 'sg-swiss-ui-v1';
 
   /* ---------- состояние ---------- */
-  const emptyState = () => ({ v: 1, name: 'Своя игра', example: false, settings: { seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, players: [], tours: [], final: null });
+  const newId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const emptyState = () => ({ v: 1, id: newId(), savedAt: Date.now(), name: 'Своя игра', example: false, settings: { seed1: 'pots', evenBattles: false, tiebreaks: ['buch', 'score', 'rating'] }, players: [], tours: [], final: null });
 
   function makeDemo() {
     const first = ['Анна', 'Борис', 'Вера', 'Глеб', 'Дарья', 'Егор', 'Жанна', 'Илья', 'Ксения', 'Лев', 'Мария', 'Никита', 'Ольга', 'Павел', 'Роман', 'Софья', 'Тимур', 'Ульяна', 'Фёдор', 'Юлия', 'Ярослав', 'Алина', 'Денис', 'Елена', 'Кирилл', 'Лидия', 'Максим', 'Нина', 'Олег', 'Полина', 'Степан'];
@@ -574,6 +580,8 @@ const SG = (() => {
     const r = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
     const st = emptyState();
     st.example = true;
+    st.id = 'demo';
+    st.savedAt = 0;
     st.name = 'Пример: кубок клуба, 31 участник';
     for (let i = 0; i < 31; i++) {
       const f = first[i], l = last[(i * 7) % 31];
@@ -600,10 +608,144 @@ const SG = (() => {
   /* ---------- хранение: общий db артефакта, иначе браузер ---------- */
   const store = { mode: 'local', canWrite: true, doc: null, lastJson: null, timer: null, writing: false, again: false, dirty: false };
 
+  /* ---------- автосохранение в файл в выбранной папке (Chrome, Edge, Яндекс Браузер на компьютере) ---------- */
+  const inArtifact = !!(window.claude && typeof window.claude.use === 'function');
+  let embedded = true;
+  try { embedded = window.self !== window.top; } catch (e) {}
+  const FS_OK = !inArtifact && !embedded && typeof window.showDirectoryPicker === 'function';
+  const fsync = { dir: null, file: null, perm: 'none', status: 'idle', savedAt: null, timer: null, writing: false, again: false, list: null, ready: !FS_OK };
+
+  const idb = (() => {
+    let p = null;
+    const open = () => p || (p = new Promise((res, rej) => {
+      const r = indexedDB.open('svoyak', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }));
+    const tx = async (mode, fn) => {
+      const db = await open();
+      return new Promise((res, rej) => {
+        const t = db.transaction('kv', mode);
+        const req = fn(t.objectStore('kv'));
+        t.oncomplete = () => res(req ? req.result : undefined);
+        t.onerror = () => rej(t.error);
+      });
+    };
+    return { get: (k) => tx('readonly', (s) => s.get(k)), set: (k, v) => tx('readwrite', (s) => s.put(v, k)) };
+  })();
+
+  const pad2 = (x) => String(x).padStart(2, '0');
+  const today = () => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+  const clock = (d) => pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+  const safeBase = (name) => String(name || 'Своя игра').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '').slice(0, 80) || 'Своя игра';
+
+  /* Вызывать прямо в обработчике клика, до любых await: браузер разрешает выбор папки только по нажатию. */
+  function ensureFolder(forcePick) {
+    if (!FS_OK) return Promise.resolve(false);
+    if (fsync.dir && !forcePick) {
+      if (fsync.perm === 'granted') return Promise.resolve(true);
+      return fsync.dir.requestPermission({ mode: 'readwrite' }).then((p) => { fsync.perm = p; return p === 'granted'; }).catch(() => false);
+    }
+    return window.showDirectoryPicker({ id: 'svoyak', mode: 'readwrite' }).then(async (d) => {
+      fsync.dir = d; fsync.perm = 'granted'; fsync.list = null;
+      try { await idb.set('dir', d); } catch (e) {}
+      return true;
+    }).catch(() => false);
+  }
+  async function exists(name) {
+    try { await fsync.dir.getFileHandle(name); return true; } catch (e) { return false; }
+  }
+  async function uniqueName(base) {
+    let name = base + '.json', i = 2;
+    while (await exists(name)) name = base + ' (' + i++ + ').json';
+    return name;
+  }
+  async function readFolderFile(name) {
+    try {
+      const f = await (await fsync.dir.getFileHandle(name)).getFile();
+      return parseTournament(await f.text());
+    } catch (e) { return null; }
+  }
+  async function bindFile(name) {
+    fsync.file = name;
+    try { await idb.set('file', name); } catch (e) {}
+  }
+  async function writeNow() {
+    if (!fsync.dir || fsync.perm !== 'granted' || !fsync.file) return;
+    if (fsync.writing) { fsync.again = true; return; }
+    clearTimeout(fsync.timer); fsync.timer = null;
+    fsync.writing = true; fsync.status = 'saving';
+    try {
+      const fh = await fsync.dir.getFileHandle(fsync.file, { create: true });
+      const w = await fh.createWritable();
+      await w.write(JSON.stringify(state, null, 1));
+      await w.close();
+      fsync.status = 'saved'; fsync.savedAt = new Date();
+    } catch (e) {
+      fsync.status = 'error';
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) { fsync.perm = 'prompt'; render(); }
+    } finally {
+      fsync.writing = false;
+      paintStatus();
+      if (fsync.again) { fsync.again = false; writeNow(); }
+    }
+  }
+  function scheduleWrite(now) {
+    if (!fsync.dir || !fsync.file) return;
+    if (fsync.perm !== 'granted') { fsync.status = 'paused'; paintStatus(); return; }
+    clearTimeout(fsync.timer);
+    fsync.timer = setTimeout(writeNow, now ? 0 : 250);
+    paintStatus();
+  }
+  async function refreshList() {
+    if (!fsync.dir || fsync.perm !== 'granted') return;
+    const out = [];
+    try {
+      for await (const [name, h] of fsync.dir.entries()) {
+        if (h.kind !== 'file' || !/\.json$/i.test(name)) continue;
+        try {
+          const f = await h.getFile();
+          const s = parseTournament(await f.text());
+          if (s) out.push({ file: name, name: s.name, players: s.players.length, played: s.tours.filter(SG.tourComplete).length, fin: !!(s.final && SG.battleResult(s.final)), modified: f.lastModified });
+        } catch (e) {}
+      }
+    } catch (e) {}
+    fsync.list = out.sort((a, b) => b.modified - a.modified).slice(0, 40);
+  }
+  /* После перезагрузки: сверить файл и данные браузера, взять более свежее. */
+  async function reconnect() {
+    fsync.perm = 'granted';
+    if (fsync.file) {
+      const fromFile = await readFolderFile(fsync.file);
+      if (!fromFile) scheduleWrite(true); // файла нет — создаём заново из данных браузера
+      else if (fromFile.id === state.id && (state.savedAt || 0) > (fromFile.savedAt || 0)) scheduleWrite(true);
+      else if (!(fromFile.id === state.id && fromFile.savedAt === state.savedAt)) { state = fromFile; persistLocal(); }
+      else { fsync.status = 'saved'; }
+    }
+    await refreshList();
+    render();
+  }
+  (async function initFileSync() {
+    if (!FS_OK) return;
+    try { fsync.dir = (await idb.get('dir')) || null; fsync.file = (await idb.get('file')) || null; } catch (e) {}
+    if (fsync.dir) {
+      try { fsync.perm = await fsync.dir.queryPermission({ mode: 'readwrite' }); } catch (e) { fsync.perm = 'prompt'; }
+      if (fsync.perm === 'granted') await reconnect();
+    }
+    fsync.ready = true;
+    render();
+  })();
+  addEventListener('pagehide', () => { if (fsync.timer) writeNow(); });
+
   function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen })); } catch (e) {} }
+  function persistLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
   function save(immediate) {
+    if (!state.id) state.id = newId();
+    state.savedAt = Date.now();
     const json = JSON.stringify(state);
     try { localStorage.setItem(LS_KEY, json); } catch (e) {}
+    scheduleWrite(immediate);
     if (store.mode !== 'db' || !store.canWrite) return;
     store.dirty = true;
     clearTimeout(store.timer);
@@ -644,7 +786,13 @@ const SG = (() => {
       if (json === JSON.stringify(state)) { store.lastJson = json; return; }
       if (store.dirty) return; // своя правка ещё не ушла — она перезапишет
       try {
-        state = JSON.parse(json);
+        const incoming = JSON.parse(json);
+        // в браузере более свежая версия того же турнира (например, страницу обновили до отправки) — не затираем её
+        if (incoming.id && incoming.id === state.id && (incoming.savedAt || 0) < (state.savedAt || 0)) {
+          if (store.canWrite) { store.dirty = true; flush(); }
+          return;
+        }
+        state = incoming;
         store.lastJson = json;
         try { localStorage.setItem(LS_KEY, json); } catch (e) {}
         const ae = document.activeElement;
@@ -760,21 +908,51 @@ const SG = (() => {
     return cells.map((c) => `<button class="cell${c.done ? ' done' : ''}" data-tab="${c.key}" aria-current="${ui.tab === c.key}"><span class="big">${esc(c.big)}</span><span class="lbl">${c.lbl}</span><span class="st">${esc(c.st)}</span></button>`).join('');
   }
 
+  function syncHtml() {
+    if (store.mode === 'db') return store.canWrite ? '<span class="dot on"></span>Сохраняется в артефакте, видно всем, у кого есть ссылка' : '<span class="dot on"></span>Режим просмотра: данные обновляются автоматически';
+    if (!FS_OK) return '<span class="dot on"></span>Данные хранятся в этом браузере';
+    if (!fsync.ready) return '<span class="dot"></span>Проверяю папку турниров…';
+    if (!fsync.dir) return '<span class="dot"></span>Автосохранение в файл выключено · <button class="linkbtn" data-act="fs-connect">Выбрать папку</button>';
+    if (fsync.perm !== 'granted') return '<span class="dot warn"></span>Запись в файл на паузе · <button class="linkbtn" data-act="fs-resume">Продолжить</button>';
+    if (!fsync.file) return '<span class="dot"></span>Турнир не записывается в файл' + (state.example ? '' : ' · <button class="linkbtn" data-act="fs-bind">Записать в папку</button>');
+    const f = '«' + esc(fsync.file) + '»';
+    if (fsync.status === 'saving' || fsync.timer) return '<span class="dot"></span>Записываю в ' + f + '…';
+    if (fsync.status === 'error') return '<span class="dot warn"></span>Не удалось записать ' + f + ' · <button class="linkbtn" data-act="fs-retry">Повторить</button>';
+    return '<span class="dot on"></span>Записано в ' + f + (fsync.savedAt ? ' · ' + clock(fsync.savedAt) : '');
+  }
+  function paintStatus() { const el = document.getElementById('syncnote'); if (el) el.innerHTML = syncHtml(); }
+
+  function newDialog() {
+    let note;
+    if (!FS_OK) note = store.mode === 'db' ? '' : 'В этом браузере запись в файл недоступна: турнир хранится в браузере, сохраняйте его кнопкой «Сохранить копию». Автосохранение в файл работает в Chrome, Edge и Яндекс Браузере на компьютере.';
+    else if (fsync.dir && fsync.perm === 'granted') note = 'В папке «' + esc(fsync.dir.name) + '» появится файл с этим названием, и каждое изменение будет сразу записываться в него.';
+    else if (fsync.dir) note = 'Браузер попросит снова разрешить запись в папку «' + esc(fsync.dir.name) + '». В ней появится файл с этим названием.';
+    else note = 'После нажатия «Создать» выберите папку, где будут храниться файлы турниров, — например, ту, где лежит это приложение. Это нужно один раз. Каждое изменение будет сразу записываться в файл.';
+    let cur = '';
+    if (!state.example && fsync.file) cur = 'Текущий турнир остаётся в файле «' + esc(fsync.file) + '».';
+    else if (!state.example && (state.players.length || state.tours.length)) cur = 'Текущий турнир не сохранён в файл и будет заменён. Если он нужен, сначала сохраните копию.';
+    return `<div class="banner newdlg">
+      <div class="field" style="flex:1 1 300px;min-width:0"><label for="newname">Название нового турнира</label><input type="text" id="newname" value="${esc('Своя игра ' + today())}" autocomplete="off"></div>
+      <div class="row"><button class="btn primary" data-act="new-do">Создать</button><button class="btn" data-act="cancel">Отмена</button></div>
+      ${note || cur ? `<p class="muted" style="flex-basis:100%;font-size:13px">${[note, cur].filter(Boolean).join(' ')}</p>` : ''}
+    </div>`;
+  }
+
   function render() {
-    const syncLabel = store.mode === 'db'
-      ? (store.canWrite ? '<span class="dot on"></span>Сохраняется в артефакте, видно всем, у кого есть ссылка' : '<span class="dot on"></span>Режим просмотра: данные обновляются автоматически')
-      : '<span class="dot on"></span>Данные хранятся на этом устройстве';
     let html = `
       <header class="top">
         <div style="display:grid;gap:4px;min-width:0">
           <span class="eyebrow">Своя игра · швейцарская система</span>
           <h1>${esc(state.name)}</h1>
         </div>
-        <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div class="syncnote">${syncLabel}</div></div>
+        <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div class="syncnote" id="syncnote">${syncHtml()}</div></div>
       </header>
       <nav class="boardwrap" aria-label="Этапы турнира"><div class="board">${stageCells()}</div></nav>`;
     if (state.example) html += `<div class="banner"><p><b>Это пример турнира</b> на 31 участника: два тура сыграны, третий разыгран. Посмотрите, как всё устроено, затем начните свой турнир.</p>${canEdit() ? '<button class="btn primary" data-act="new-ask">Начать свой турнир</button>' : ''}</div>`;
-    if (ui.confirm === 'new') html += `<div class="banner warn"><p>Удалить всех участников и результаты и начать новый турнир? Отменить это нельзя. Если нужно, сначала сохраните турнир в файл на вкладке «Участники».</p><div class="row"><button class="btn danger" data-act="new-do">Начать заново</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
+    if (ui.confirm === 'new') html += newDialog();
+    if (FS_OK && fsync.ready && fsync.dir && fsync.file && fsync.perm !== 'granted' && ui.confirm !== 'new') {
+      html += `<div class="banner warn"><p>Браузер после перезапуска спрашивает разрешение снова записывать в папку «${esc(fsync.dir.name)}». Нажмите «Продолжить» — турнир «${esc(fsync.file)}» откроется из файла, запись продолжится.</p><button class="btn primary" data-act="fs-resume">Продолжить</button></div>`;
+    }
     if (ui.pending) {
       const p = ui.pending, played = p.tours.filter(SG.tourComplete).length;
       html += `<div class="banner warn"><p>Открыть турнир «${esc(p.name || 'без названия')}»: ${p.players.length} ${plural(p.players.length, 'участник', 'участника', 'участников')}, сыграно туров: ${played} из 4? Текущий турнир на этом устройстве будет заменён.</p><div class="row"><button class="btn primary" data-act="open-do">Открыть</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
@@ -836,16 +1014,44 @@ const SG = (() => {
             <div class="row">1. ${tbSelect(0)}</div><div class="row">2. ${tbSelect(1)}</div><div class="row">3. ${tbSelect(2)}</div>
           </div>
         </section>
-        <section class="panel">
-          <h2>Файл турнира</h2>
-          <p class="muted">Сохраните турнир в файл, чтобы перенести его на другое устройство, передать другому судье или сохранить на память. Файл открывается в этом приложении где угодно, в том числе без интернета.</p>
-          <div class="row"><button class="btn" data-act="save-file">Сохранить в файл</button>${canEdit() ? '<label class="btn" for="openfile">Открыть файл…</label><input type="file" id="openfile" accept=".json,.txt,application/json,text/plain" hidden>' : ''}</div>
-          <div class="row"><button class="linkbtn" data-act="export">Скопировать текстом</button>${canEdit() ? '<button class="linkbtn" data-act="import-toggle">Вставить из текста</button>' : ''}</div>
-          ${ui.importOpen && canEdit() ? `<div class="field"><label for="importtxt">Вставьте текст копии турнира</label><textarea id="importtxt" placeholder='{"v":1,...}'></textarea><div class="row"><button class="btn primary" data-act="import-do">Открыть турнир</button></div></div>` : ''}
-          ${canEdit() && !state.example ? '<div><button class="linkbtn" data-act="new-ask">Начать новый турнир</button></div>' : ''}
-        </section>
+        ${filesPanel()}
       </div>
     </div>`;
+  }
+
+  function filesPanel() {
+    const manual = `
+      <div class="row"><button class="btn" data-act="save-file">${FS_OK && fsync.file ? 'Сохранить копию' : 'Сохранить в файл'}</button>${canEdit() ? '<label class="btn" for="openfile">Открыть файл…</label><input type="file" id="openfile" accept=".json,.txt,application/json,text/plain" hidden>' : ''}${canEdit() ? '<button class="btn" data-act="new-ask">Новый турнир</button>' : ''}</div>
+      <div class="row"><button class="linkbtn" data-act="export">Скопировать текстом</button>${canEdit() ? '<button class="linkbtn" data-act="import-toggle">Вставить из текста</button>' : ''}</div>
+      ${ui.importOpen && canEdit() ? `<div class="field"><label for="importtxt">Вставьте текст копии турнира</label><textarea id="importtxt" placeholder='{"v":1,...}'></textarea><div class="row"><button class="btn primary" data-act="import-do">Открыть турнир</button></div></div>` : ''}`;
+
+    if (!FS_OK) {
+      return `<section class="panel"><h2>Файл турнира</h2>
+        <p class="muted">Сохраните турнир в файл, чтобы перенести его на другое устройство, передать другому судье или сохранить на память. Файл открывается в этом приложении где угодно, в том числе без интернета.</p>
+        ${store.mode === 'db' ? '' : '<p class="muted" style="font-size:13px">Автоматическая запись в файл при каждом изменении работает в Chrome, Edge и Яндекс Браузере на компьютере.</p>'}
+        ${manual}</section>`;
+    }
+    let body;
+    if (!fsync.dir) {
+      body = `<p>Выберите папку один раз — например, ту, где лежит это приложение. Каждый турнир будет храниться в ней отдельным файлом, и любое изменение сразу записывается в файл. Если страница закроется или сбросится, турнир откроется из файла без потерь.</p>
+        <div><button class="btn primary" data-act="fs-connect">Выбрать папку для турниров</button></div>`;
+    } else if (fsync.perm !== 'granted') {
+      body = `<p>Папка «${esc(fsync.dir.name)}». После перезапуска браузер просит разрешение на запись ещё раз.</p>
+        <div class="row"><button class="btn primary" data-act="fs-resume">Продолжить</button><button class="linkbtn" data-act="fs-change">Выбрать другую папку</button></div>`;
+    } else {
+      const list = fsync.list || [];
+      const rows = list.map((f) => {
+        const cur = f.file === fsync.file;
+        const d = new Date(f.modified);
+        const st = f.fin ? 'финал сыгран' : 'туров: ' + f.played + ' из 4';
+        return `<tr class="${cur ? 'cur' : ''}"><td class="name">${esc(f.name || f.file)}<br><small class="muted num">${esc(f.file)}</small></td><td class="r num">${f.players}</td><td>${st}</td><td class="num">${pad2(d.getDate())}.${pad2(d.getMonth() + 1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}</td><td>${cur ? '<span class="chip okc">открыт</span>' : canEdit() ? `<button class="btn" data-act="fs-open" data-file="${esc(f.file)}">Открыть</button>` : ''}</td></tr>`;
+      }).join('');
+      body = `<p>Папка «<b>${esc(fsync.dir.name)}</b>». ${fsync.file ? 'Текущий турнир записывается в «' + esc(fsync.file) + '».' : state.example ? 'Сейчас открыт пример, он в файл не записывается.' : 'Текущий турнир пока не записывается в файл.'}</p>
+        ${!fsync.file && !state.example && canEdit() ? '<div><button class="btn primary" data-act="fs-bind">Записать текущий турнир в папку</button></div>' : ''}
+        ${list.length ? `<div class="tablewrap"><table class="flist"><thead><tr><th>Турнир</th><th class="r">Уч.</th><th>Статус</th><th>Изменён</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">В папке пока нет турниров.</p>'}
+        <div class="row"><button class="linkbtn" data-act="fs-refresh">Обновить список</button><button class="linkbtn" data-act="fs-change">Выбрать другую папку</button></div>`;
+    }
+    return `<section class="panel"><h2>Файлы турниров</h2>${body}${manual}</section>`;
   }
 
   function viewTour(t) {
@@ -1062,10 +1268,11 @@ const SG = (() => {
       fr.onload = () => {
         const s = parseTournament(String(fr.result || ''));
         if (!s) return toast('Этот файл не похож на файл турнира. Выберите .json, сохранённый этим приложением.');
-        ui.pending = s; render(); window.scrollTo({ top: 0 });
+        ui.pending = s; ui.pendingName = file.name; render(); window.scrollTo({ top: 0 });
       };
       fr.onerror = () => toast('Не удалось прочитать файл');
-      fr.readAsText(el.files[0]);
+      const file = el.files[0];
+      fr.readAsText(file);
       el.value = '';
     }
   });
@@ -1080,9 +1287,69 @@ const SG = (() => {
       return s;
     } catch (e) { return null; }
   }
-  function applyState(s) {
-    state = s; ui.importOpen = false; ui.tab = 'players'; saveUi(); save(true); render();
-    toast('Турнир «' + (s.name || 'без названия') + '» открыт');
+  /* Открыть турнир из внешнего файла или текста. okP — результат ensureFolder(), начатый в обработчике клика. */
+  async function applyState(s, okP, srcName) {
+    if (!s.id) s.id = newId();
+    s.example = false;
+    const ok = okP ? await okP : false;
+    let msg = 'Турнир «' + (s.name || 'без названия') + '» открыт';
+    if (ok) {
+      if (fsync.timer) await writeNow();
+      const base = safeBase(srcName ? srcName.replace(/\.(json|txt)$/i, '') : s.name);
+      let name = base + '.json';
+      if (await exists(name)) {
+        const there = await readFolderFile(name);
+        if (there && there.id === s.id) {
+          if ((there.savedAt || 0) > (s.savedAt || 0)) { s = there; msg = 'В папке более свежая версия этого турнира — открыта она'; }
+        } else name = await uniqueName(base + ' (копия)');
+      }
+      state = s; persistLocal();
+      await bindFile(name); await writeNow(); await refreshList();
+      msg += ' · записывается в «' + name + '»';
+    } else {
+      state = s; persistLocal();
+      if (FS_OK) await bindFile(null);
+    }
+    ui.importOpen = false; ui.tab = 'players'; saveUi();
+    if (store.mode === 'db') save(true);
+    render(); toast(msg);
+  }
+
+  async function createTournament(name, okP) {
+    const s = emptyState();
+    s.name = name;
+    const ok = okP ? await okP : false;
+    if (fsync.timer) await writeNow(); // дописать предыдущий турнир
+    state = s; persistLocal();
+    ui.confirm = null; ui.tab = 'players'; saveUi();
+    if (ok) {
+      const file = await uniqueName(safeBase(name));
+      await bindFile(file); await writeNow(); await refreshList();
+      toast('Создан файл «' + file + '»');
+    } else {
+      if (FS_OK) { await bindFile(null); toast('Папка не выбрана: турнир хранится только в браузере. Выбрать папку можно на вкладке «Участники».'); }
+      if (store.mode === 'db') save(true);
+    }
+    render();
+    const el = document.getElementById('bulk'); if (el) el.focus();
+  }
+
+  async function bindCurrent(okP) {
+    if (!(await okP)) return render();
+    if (state.example) { await refreshList(); return render(); }
+    const file = await uniqueName(safeBase(state.name));
+    await bindFile(file); await writeNow(); await refreshList();
+    render(); toast('Турнир записывается в «' + file + '»');
+  }
+
+  async function openFromFolder(file) {
+    if (fsync.timer) await writeNow();
+    const s = await readFolderFile(file);
+    if (!s) { toast('Не удалось прочитать «' + file + '»'); await refreshList(); return render(); }
+    state = s; persistLocal(); await bindFile(file);
+    fsync.status = 'saved'; fsync.savedAt = null;
+    ui.tab = 'players'; saveUi(); render(); window.scrollTo({ top: 0 });
+    toast('Открыт «' + file + '»');
   }
   function fileName() {
     const d = new Date(), pad = (x) => String(x).padStart(2, '0');
@@ -1126,7 +1393,15 @@ const SG = (() => {
   }
   app.addEventListener('mouseover', (e) => { const o = e.target.closest && e.target.closest('.opps'); highlightOpps(o); });
   app.addEventListener('mouseleave', () => highlightOpps(null));
+  function startNew() {
+    const el = document.getElementById('newname');
+    const name = (el && el.value.trim()) || 'Своя игра ' + today();
+    const okP = FS_OK ? ensureFolder() : null; // в том же нажатии — иначе браузер не покажет выбор папки
+    createTournament(name, okP);
+  }
   app.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'newname') { e.preventDefault(); return startNew(); }
+    if (e.key === 'Escape' && ui.confirm === 'new') { ui.confirm = null; return render(); }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset && e.target.dataset.swap) { e.preventDefault(); e.target.click(); }
   });
   app.addEventListener('click', (e) => {
@@ -1157,16 +1432,32 @@ const SG = (() => {
     if (!a) return;
     const act = a.dataset.act;
     if (act === 'draw') return drawTour();
-    if (act === 'cancel' || act === 'copy-close') { ui.confirm = null; ui.copyText = null; ui.pending = null; return render(); }
+    if (act === 'cancel' || act === 'copy-close') { ui.confirm = null; ui.copyText = null; ui.pending = null; ui.pendingName = null; return render(); }
     if (act === 'save-file') return saveFile();
-    if (act === 'open-do') { applyState(ui.pending); ui.pending = null; return; }
+    if (act === 'open-do') {
+      const s = ui.pending, src = ui.pendingName;
+      const okP = fsync.dir ? ensureFolder() : null;
+      ui.pending = null; ui.pendingName = null;
+      return applyState(s, okP, src);
+    }
+    if (act === 'fs-connect') return bindCurrent(ensureFolder());
+    if (act === 'fs-change') return bindCurrent(ensureFolder(true).then(async (ok) => { if (ok) await bindFile(null); return ok; }));
+    if (act === 'fs-resume') { ensureFolder().then((ok) => (ok ? reconnect() : toast('Без разрешения запись в файл невозможна'))); return; }
+    if (act === 'fs-bind') return bindCurrent(ensureFolder());
+    if (act === 'fs-retry') { ensureFolder().then((ok) => ok && writeNow()); return; }
+    if (act === 'fs-refresh') { refreshList().then(render); return; }
+    if (act === 'fs-open') { const f = a.dataset.file; ensureFolder().then((ok) => ok && openFromFolder(f)); return; }
     if (act === 'install' && installPrompt) {
       installPrompt.prompt();
       installPrompt.userChoice.finally(() => { installPrompt = null; render(); });
       return;
     }
-    if (act === 'new-ask') { ui.confirm = 'new'; render(); return window.scrollTo({ top: 0 }); }
-    if (act === 'new-do') { state = emptyState(); ui.confirm = null; ui.tab = 'players'; saveUi(); save(true); return render(); }
+    if (act === 'new-ask') {
+      ui.confirm = 'new'; render(); window.scrollTo({ top: 0 });
+      const el = document.getElementById('newname'); if (el) { el.focus(); el.select(); }
+      return;
+    }
+    if (act === 'new-do') return startNew();
     if (act === 'undo-ask') { ui.confirm = 'undo'; return render(); }
     if (act === 'undo-do') return undoTour();
     if (act === 'swap-toggle') { ui.swap = !ui.swap; ui.sel = null; return render(); }
