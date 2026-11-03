@@ -1052,6 +1052,10 @@ const XLSX = (() => {
     let lastSheet = {};
     try { lastSheet = JSON.parse(localStorage.getItem(LS_SHEET) || '{}') || {}; } catch (e) {}
     s.settings.sheet = Object.assign({ url: lastSheet.url || '', key: lastSheet.key || '', tour: guessTour(s.name), live: true }, s.settings.sheet || {});
+    // ссылка и ключ из открытого файла турнира запоминаются в этом браузере — для новых турниров
+    if (!s.example && s.settings.sheet.url && s.settings.sheet.key && (s.settings.sheet.url !== lastSheet.url || s.settings.sheet.key !== lastSheet.key)) {
+      try { localStorage.setItem(LS_SHEET, JSON.stringify({ url: s.settings.sheet.url, key: s.settings.sheet.key })); } catch (e) {}
+    }
     s.final = s.final || null;
     return s;
   }
