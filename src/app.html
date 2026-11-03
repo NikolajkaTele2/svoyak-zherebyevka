@@ -426,7 +426,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
 
 
   /* ---------- заливка в Google Таблицу (скрипт gas/Code.gs в таблице сезона) ---------- */
-  const gs = { status: 'idle', at: null, timer: null, retry: null, busy: false, again: false, lastSig: null, other: null, check: null };
+  const gs = { msg: '', status: 'idle', at: null, timer: null, retry: null, busy: false, again: false, lastSig: null, other: null, check: null };
   const sheetCfg = () => state.settings.sheet;
   const sheetReady = () => { const c = sheetCfg(); return !!(c && /^https:\/\/script\.google(usercontent)?\.com\//.test(c.url) && c.key && c.tour >= 1 && c.tour <= 4); };
   const sheetOn = () => sheetReady() && !state.example && canEdit();
@@ -475,6 +475,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       }
       if (res && res.ok) { gs.status = 'ok'; gs.at = new Date(); gs.lastSig = sig; gs.other = null; }
       else if (res && res.error === 'key') gs.status = 'key';
+      else if (res && res.error === 'exception') { gs.status = 'script'; gs.msg = res.message || ''; gs.retry = setTimeout(() => sendSheet(false), 60000); }
       else if (res && res.error === 'conflict') { gs.status = 'conflict'; gs.other = res.other || ''; render(); }
       else { gs.status = 'error'; gs.retry = setTimeout(() => sendSheet(false), 15000); }
     } catch (e) {
@@ -495,6 +496,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     if (gs.status === 'ok') return '<span class="dot on"></span>' + n + ': обновлено ' + clock(gs.at);
     if (gs.status === 'offline') return '<span class="dot warn"></span>' + n + ': нет сети, отправлю, когда появится';
     if (gs.status === 'error') return '<span class="dot warn"></span>' + n + ': не отправилось, повторю · <button class="linkbtn" data-act="gs-send">Сейчас</button>';
+    if (gs.status === 'script') return '<span class="dot warn"></span>' + n + ': ошибка в таблице — ' + esc(gs.msg) + ' · <button class="linkbtn" data-act="gs-send">Повторить</button>';
     if (gs.status === 'key') return '<span class="dot warn"></span>' + n + ': скрипт не принял ключ';
     if (gs.status === 'conflict') return '<span class="dot warn"></span>' + n + ' занят другим турниром';
     if (!sheetCfg().live) return '<span class="dot"></span>' + n + ': только по кнопке · <button class="linkbtn" data-act="gs-send">Отправить</button>';

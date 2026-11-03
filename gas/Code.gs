@@ -22,7 +22,12 @@ const px = (w) => Math.round(w * 7 + 5); // ширина как в Excel → п�
 function doPost(e) {
   let req;
   try { req = JSON.parse(e.postData.contents); } catch (err) { return out_({ ok: false, error: 'bad-json' }); }
-  return out_(handle_(req));
+  try {
+    return out_(handle_(req));
+  } catch (err) {
+    console.error(err && err.stack ? err.stack : err);
+    return out_({ ok: false, error: 'exception', message: String((err && err.message) || err) });
+  }
 }
 
 function doGet(e) {
@@ -60,11 +65,11 @@ function handle_(req) {
     if (cur && cur.id && snap.id && cur.id !== snap.id && !req.force) return { ok: false, error: 'conflict', tour, other: cur.name };
     if (cur && cur.id === snap.id && (cur.savedAt || 0) > (snap.savedAt || 0)) return { ok: true, stale: true, tour, savedAt: cur.savedAt };
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    drawBattles_(sheet_(ss, 'Тур ' + tour + ' Бои', TAB[tour]), snap);
-    drawTable_(sheet_(ss, 'Тур ' + tour + ' Таблица', TAB[tour]), snap);
+    draw_(ss, 'Тур ' + tour + ' Бои', TAB[tour], (sh) => drawBattles_(sh, snap));
+    draw_(ss, 'Тур ' + tour + ' Таблица', TAB[tour], (sh) => drawTable_(sh, snap));
     reg[tour] = { id: snap.id, name: snap.name, savedAt: snap.savedAt, result: snap.result || null };
     PropertiesService.getScriptProperties().setProperty('tour' + tour, JSON.stringify(reg[tour]));
-    drawSeason_(sheet_(ss, 'Отбор Таблица', TAB[0]), reg);
+    draw_(ss, 'Отбор Таблица', TAB[0], (sh) => drawSeason_(sh, reg));
     SpreadsheetApp.flush();
     return { ok: true, tour, savedAt: snap.savedAt };
   } finally {
@@ -89,7 +94,7 @@ function resetTour4() { reset_(4); }
 function reset_(t) {
   PropertiesService.getScriptProperties().deleteProperty('tour' + t);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  drawSeason_(sheet_(ss, 'Отбор Таблица', TAB[0]), registry_());
+  draw_(ss, 'Отбор Таблица', TAB[0], (sh) => drawSeason_(sh, registry_()));
 }
 
 /* ---------- листы ---------- */
@@ -103,6 +108,25 @@ function sheet_(ss, name, color) {
   }
   sh.setTabColor(color);
   return sh;
+}
+
+/* Нарисовать лист; если на старом листе что-то мешает (защита, фильтр, «умная» таблица),
+   лист пересоздаётся на том же месте и рисуется заново. */
+function draw_(ss, name, color, fn) {
+  try {
+    fn(sheet_(ss, name, color));
+  } catch (err) {
+    console.warn('Лист «' + name + '»: ' + (err && err.message) + ' — пересоздаю');
+    const old = ss.getSheetByName(name);
+    if (!old) throw new Error('Лист «' + name + '»: ' + ((err && err.message) || err));
+    const at = old.getIndex() - 1;
+    if (ss.getSheets().length === 1) ss.insertSheet('Временный', 0);
+    ss.deleteSheet(old);
+    const sh = ss.insertSheet(name, at);
+    sh.setTabColor(color);
+    try { fn(sh); } catch (err2) { throw new Error('Лист «' + name + '»: ' + ((err2 && err2.message) || err2)); }
+    const tmp = ss.getSheetByName('Временный'); if (tmp) ss.deleteSheet(tmp);
+  }
 }
 
 /* Сетка ячеек: put(r, c, значение, {bg, b, al, color, size}); затем paint_ пишет всё разом. */

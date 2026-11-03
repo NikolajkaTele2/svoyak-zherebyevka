@@ -13,6 +13,7 @@ function makeEnv() {
   }
   Sheet.prototype = {
     getName() { return this.name; },
+    getIndex() { return ss.sheets.indexOf(this) + 1; },
     getMaxRows() { return this.maxR; }, getMaxColumns() { return this.maxC; },
     insertRowsAfter(a, n) { this.maxR += n; }, insertColumnsAfter(a, n) { this.maxC += n; },
     clear() { this.cells = {}; this.borders = []; this.wrap = []; return this; },
@@ -46,7 +47,7 @@ function makeEnv() {
   };
   const each = (attr) => function (v) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.cell(this.r + i, this.c + j)[attr] = v; return this; };
   Range.prototype = {
-    setValues: grid('v'), setBackgrounds: grid('bg'), setFontWeights: grid('fw'), setHorizontalAlignments: grid('al'), setFontColors: grid('fc'), setFontSizes: grid('fs'),
+    setValues(A) { if (this.sh.broken) fail('на листе есть умная таблица'); return grid('v').call(this, A); }, setBackgrounds: grid('bg'), setFontWeights: grid('fw'), setHorizontalAlignments: grid('al'), setFontColors: grid('fc'), setFontSizes: grid('fs'),
     setNumberFormat: each('fmt'), setFontFamily: each('ff'), setVerticalAlignment: each('va'),
     setWrap(w) { this.sh.wrap.push([this.r, this.c, this.nr, this.nc, w]); return this; },
     merge() {
@@ -67,6 +68,7 @@ function makeEnv() {
     getName() { return this.title; },
     getSheets() { return this.sheets.slice(); },
     getSheetByName(n) { return this.sheets.find((s) => s.name === n) || null; },
+    deleteSheet(sh) { if (this.sheets.length === 1) fail('нельзя удалить единственный лист'); this.sheets = this.sheets.filter((x) => x !== sh); },
     insertSheet(n, i) { if (this.getSheetByName(n)) fail('лист уже есть'); const s = new Sheet(n); this.sheets.splice(i, 0, s); return s; },
   };
   const props = {};
@@ -82,7 +84,7 @@ function makeEnv() {
       MimeType: { JSON: 'json', JAVASCRIPT: 'js' },
       createTextOutput: (s) => ({ s, mime: 'text', setMimeType(m) { this.mime = m; return this; }, getContent() { return this.s; } }),
     },
-    console,
+    console: { log() {}, warn() {}, error() {} },
   };
   vm.createContext(ctx);
   const code = fs.readFileSync(path.join(__dirname, '..', 'gas', 'Code.gs'), 'utf8');

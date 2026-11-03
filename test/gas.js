@@ -109,4 +109,14 @@ assert(get({ act: 'status', key: K, callback: 'x);alert(1' }).startsWith('{'), '
 const E = tournament(48, 'E');
 r = post({ key: K, tour: 4, snap: SG.sheetSnapshot(E) });
 assert(r.ok, '48 участников: ' + JSON.stringify(r));
+// 10. Старый лист с помехой пересоздаётся на том же месте; неустранимая ошибка приходит текстом
+const env2 = makeEnv();
+const bad = env2.ss.insertSheet('Тур 1 Таблица', 0); bad.broken = true;
+r = env2.post({ key: K, tour: 1, snap: SG.sheetSnapshot(A) });
+assert(r.ok && env2.ss.getSheetByName('Тур 1 Таблица') !== bad && !env2.ss.getSheetByName('Временный'), 'лист с помехой пересоздан: ' + JSON.stringify(r));
+assert(env2.ss.getSheets().map((x) => x.name).slice(0, 3).join() === 'Тур 1 Бои,Тур 1 Таблица,Отбор Таблица', 'на том же месте');
+const env3 = makeEnv();
+env3.ss.insertSheet = () => { throw new Error('нет прав'); };
+r = env3.post({ key: K, tour: 1, snap: SG.sheetSnapshot(A) });
+assert(!r.ok && r.error === 'exception' && /нет прав/.test(r.message), 'текст ошибки уходит в приложение: ' + JSON.stringify(r));
 console.log('OK: заливка в Google Таблицу (имитация): листы, цвета боёв, защита от чужого турнира, Отбор без худшего, 48 участников');
