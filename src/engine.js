@@ -62,23 +62,23 @@ const SG = (() => {
   }
 
   /* Турнирная таблица по завершённым турам (первые `upto`). */
-  /* Дополнительные показатели. h2h — личная встреча: считается внутри группы равных, поэтому get только для показа. */
+  /* Дополнительные показатели. Личная встреча — не пункт списка, а проверка перед каждым показателем (h2hEach). */
   const TB = {
-    buch: { label: 'Сила соперников', short: 'Сила соп.', get: (r) => r.opp },
     score: { label: 'Сумма баллов', short: 'Баллы', get: (r) => r.score },
-    h2h: { label: 'Личная встреча', short: 'Личн.', group: true, get: (r) => r.h2h },
+    buch: { label: 'Сила соперников', short: 'Сила соп.', get: (r) => r.opp },
   };
-  const TB_DEFAULT = ['h2h', 'buch', 'score'];
-  /* Порядок показателей из настроек; устаревший «рейтинг» заменяется личной встречей. */
+  const TB_DEFAULT = ['score', 'buch'];
+  const SEP = { h2h: 'личн. встреча', score: 'баллы', buch: 'сила соп.', shoot: 'перестрелка', rating: 'рейтинг', shared: 'делят' };
+  /* Порядок показателей из настроек (старые «h2h» и «rating» в списке игнорируются). */
   function tbOrder(state) {
-    let raw = (state.settings && state.settings.tiebreaks) || TB_DEFAULT;
-    // турниры из старых версий: «рейтинг» убран, личная встреча ставится первой (последней она почти никогда не срабатывает)
-    if (raw.includes('rating')) raw = ['h2h'].concat(raw.filter((k) => k !== 'rating'));
+    const raw = (state.settings && state.settings.tiebreaks) || TB_DEFAULT;
     const out = [];
     raw.forEach((k) => { if (TB[k] && !out.includes(k)) out.push(k); });
     TB_DEFAULT.forEach((k) => { if (!out.includes(k)) out.push(k); });
-    return out.slice(0, 3);
+    return out;
   }
+  const h2hOn = (state) => !(state.settings && state.settings.h2hEach === false);
+  const groupKey = (ids) => ids.slice().sort().join(',');
 
   /* Личная встреча внутри группы равных.
      Двое: применяется, если они играли в одном бою. Трое и больше: только если каждый играл с каждым.
@@ -128,6 +128,9 @@ const SG = (() => {
       row.opp = row.opps.length ? row.opps.reduce((s, o) => s + rows[o].pts, 0) / row.opps.length : 0;
     });
     const order = tbOrder(state);
+    const useH2H = h2hOn(state);
+    const shootouts = (state.shootouts) || {};
+    const fullTies = [];
     const eq = (a, b) => Math.abs(a - b) < 1e-9;
     // разбить отсортированный по убыванию key массив на группы равных
     const split = (arr, key) => {
@@ -135,27 +138,47 @@ const SG = (() => {
       arr.forEach((r) => { const last = out[out.length - 1]; if (last && eq(key(last[0]), key(r))) last.push(r); else out.push([r]); });
       return out;
     };
-    // Группа равных по очкам упорядочивается показателями по очереди; последний запасной вариант —
-    // исходный рейтинг, затем имя (чтобы порядок всегда был определён).
-    function rankGroup(group, k) {
+    // Разбить группу по ключу; на стыке частей запомнить, чем решено (sep у последнего в части).
+    const splitBy = (group, key, crit, next) => {
+      const parts = split(group.slice().sort((a, b) => key(b) - key(a)), key);
+      return parts.flatMap((g, i) => { const r = next(g); if (i < parts.length - 1) r[r.length - 1].sep = crit; return r; });
+    };
+    // Равные по очкам: перед каждым показателем пробуем личную встречу (если каждый играл с каждым).
+    // Кто остался равным после показателя — для них снова личная встреча, затем следующий показатель.
+    function rankGroup(group, k, h2hTried) {
       if (group.length < 2) return group;
-      if (k >= order.length) return group.slice().sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name, 'ru'));
-      const key = order[k];
-      let key2;
-      if (TB[key].group) {
+      if (useH2H && !h2hTried) {
         const s = headToHead(group, met);
-        if (!s) return rankGroup(group, k + 1);
-        group.forEach((r) => { r.h2h = s.get(r.id); });
-        key2 = (r) => s.get(r.id);
-      } else key2 = TB[key].get;
-      const sorted = group.slice().sort((a, b) => key2(b) - key2(a));
-      return split(sorted, key2).flatMap((g) => rankGroup(g, k + 1));
+        if (s && new Set(group.map((r) => s.get(r.id))).size > 1) {
+          group.forEach((r) => { r.h2h = s.get(r.id); });
+          return splitBy(group, (r) => s.get(r.id), 'h2h', (g) => rankGroup(g, k, false));
+        }
+      }
+      if (k < order.length) return splitBy(group, TB[order[k]].get, order[k], (g) => rankGroup(g, k + 1, false));
+      // полное равенство: порядок из перестрелки, если введён, иначе по рейтингу
+      const manual = shootouts[groupKey(group.map((r) => r.id))];
+      const sorted = manual
+        ? group.slice().sort((a, b) => manual.indexOf(a.id) - manual.indexOf(b.id))
+        : group.slice().sort((a, b) => b.rating - a.rating || a.name.localeCompare(b.name, 'ru'));
+      fullTies.push({ rows: sorted, manual: !!manual });
+      sorted.forEach((r, i) => { if (i < sorted.length - 1) r.sep = manual ? 'shoot' : 'rating'; });
+      return sorted;
     }
     const byPts = Object.values(rows).sort((a, b) => b.pts - a.pts);
-    const list = split(byPts, (r) => r.pts).flatMap((g) => rankGroup(g, 0));
-    // места с учётом полного совпадения всех показателей
-    list.forEach((row, i) => {
-      row.rank = i + 1;
+    const list = split(byPts, (r) => r.pts).flatMap((g) => rankGroup(g, 0, false));
+    list.forEach((row, i) => { row.rank = i + 1; row.placeFrom = row.placeTo = i + 1; row.place = String(i + 1); });
+    // Полное равенство: на границе тройки — нужна перестрелка; с 4-го места и ниже — места делятся.
+    list.shootout = null;
+    fullTies.forEach((t) => {
+      const from = t.rows[0].rank, to = t.rows[t.rows.length - 1].rank;
+      if (from <= 3 && to >= 4) {
+        if (!t.manual) list.shootout = { ids: t.rows.map((r) => r.id), from, to, key: groupKey(t.rows.map((r) => r.id)) };
+        // по регламенту: результат перестрелки за выход в тройку для оставшихся не учитывается — они делят места
+        const rest = t.rows.filter((r) => r.rank >= 4);
+        if (t.manual && rest.length > 1) rest.forEach((r, i) => { r.placeFrom = rest[0].rank; r.placeTo = rest[rest.length - 1].rank; r.place = r.placeFrom + '–' + r.placeTo; if (i < rest.length - 1) r.sep = 'shared'; });
+      } else if (from >= 4) {
+        t.rows.forEach((r, i) => { r.placeFrom = from; r.placeTo = to; r.place = from + '–' + to; if (i < t.rows.length - 1) r.sep = 'shared'; });
+      }
     });
     return list;
   }
@@ -326,17 +349,70 @@ const SG = (() => {
     return new Set([...a].filter((id) => b.has(id)));
   }
 
-  function hostCandidates(battles, bi, hostIds, blocked) {
+  /* scope: 'venue' — отдыхающие на той же площадке; 'all' — все, кто не играет в эту волну (тот же номер боя на площадке). */
+  const isFree = (o, b, scope) => (scope === 'all' ? o.slot !== b.slot : o.venue === b.venue);
+  function hostCandidates(battles, bi, hostIds, blocked, scope) {
     blocked = blocked || new Set();
     const b = battles[bi];
     const rank = new Map((hostIds || []).map((id, i) => [id, i]));
     const out = [];
     if (!b || b.venue === null || b.venue === undefined) return out;
     battles.forEach((o, oi) => {
-      if (oi === bi || o.venue !== b.venue) return;
-      o.players.forEach((id) => out.push({ id, battle: oi, rank: rank.has(id) ? rank.get(id) : null, blocked: blocked.has(id) }));
+      if (oi === bi || o.venue === null || o.venue === undefined || !isFree(o, b, scope)) return;
+      o.players.forEach((id) => out.push({ id, battle: oi, venue: o.venue, sameVenue: o.venue === b.venue, rank: rank.has(id) ? rank.get(id) : null, blocked: blocked.has(id) }));
     });
-    return out.sort((a, c) => (a.blocked - c.blocked) || (a.rank === null ? 1e9 : a.rank) - (c.rank === null ? 1e9 : c.rank) || a.battle - c.battle);
+    return out.sort((a, c) => (a.blocked - c.blocked) || (a.rank === null ? 1e9 : a.rank) - (c.rank === null ? 1e9 : c.rank) || (c.sameVenue - a.sameVenue) || a.battle - c.battle);
+  }
+
+  /* Ведущие из всех свободных: подбор сразу по всему туру. Кандидаты берутся в порядке списка,
+     каждый добавляется, если для него находится бой (с перестановкой уже назначенных) — так закрывается
+     максимум боёв и используются самые приоритетные. При выборе боя для человека — сначала его площадка. */
+  function assignHostsAll(battles, rank, blocked) {
+    const idx = battles.map((b, i) => i).filter((i) => battles[i].venue !== null && battles[i].venue !== undefined);
+    const used = new Set(), matchB = new Map(), matchH = new Map();
+    const playsIn = new Map(); idx.forEach((i) => battles[i].players.forEach((p) => playsIn.set(p, i)));
+    for (const i of idx) {
+      const b = battles[i];
+      if (!b.hostManual) continue;
+      const hb = b.host === null ? null : playsIn.get(b.host);
+      const ok = b.host === null || (hb !== undefined && battles[hb].slot !== b.slot && !used.has(b.host));
+      if (ok) { if (b.host) used.add(b.host); matchB.set(i, b.host); } else b.hostManual = false;
+    }
+    const free = idx.filter((i) => !matchB.has(i));
+    const adj = (h) => {
+      const own = battles[playsIn.get(h)];
+      return free.filter((i) => battles[i].slot !== own.slot).sort((x, y) => ((battles[y].venue === own.venue) - (battles[x].venue === own.venue)) || x - y);
+    };
+    const tryAssign = (h, seen) => {
+      for (const i of adj(h)) {
+        if (seen.has(i)) continue;
+        seen.add(i);
+        const cur = matchB.get(i);
+        if (cur === undefined || tryAssign(cur, seen)) { matchB.set(i, h); matchH.set(h, i); return true; }
+      }
+      return false;
+    };
+    const hosts = [...rank.keys()].filter((h) => playsIn.has(h) && !used.has(h) && !blocked.has(h)).sort((a, c) => rank.get(a) - rank.get(c));
+    for (const h of hosts) tryAssign(h, new Set());
+    // те же люди, но перестановкой между боями — побольше ведущих на своей площадке
+    const canHost = (h, i) => battles[playsIn.get(h)].slot !== battles[i].slot;
+    const home = (h, i) => (battles[playsIn.get(h)].venue === battles[i].venue ? 1 : 0);
+    for (let improved = true, guard = 0; improved && guard < 50; guard++) {
+      improved = false;
+      for (const i of free) for (const j of free) {
+        if (i >= j) continue;
+        const hi = matchB.get(i), hj = matchB.get(j);
+        if (hi !== undefined && hj !== undefined) {
+          if (canHost(hi, j) && canHost(hj, i) && home(hi, j) + home(hj, i) > home(hi, i) + home(hj, j)) { matchB.set(i, hj); matchB.set(j, hi); improved = true; }
+        } else if (hi !== undefined && hj === undefined) {
+          if (canHost(hi, j) && home(hi, j) > home(hi, i)) { matchB.delete(i); matchB.set(j, hi); improved = true; }
+        } else if (hj !== undefined && hi === undefined) {
+          if (canHost(hj, i) && home(hj, i) > home(hj, j)) { matchB.delete(j); matchB.set(i, hj); improved = true; }
+        }
+      }
+    }
+    free.forEach((i) => { battles[i].host = matchB.has(i) ? matchB.get(i) : null; battles[i].hostManual = false; });
+    return battles;
   }
 
   const lessKey = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
@@ -344,10 +420,11 @@ const SG = (() => {
   /* Назначить ведущих. На каждой площадке: один человек ведёт не больше одного боя за тур;
      сначала стараемся закрыть ведущими все бои, затем берём тех, кто выше в списке ведущих.
      Назначенные вручную (hostManual) сохраняются, если всё ещё допустимы. */
-  function assignHosts(battles, hostIds, blocked) {
+  function assignHosts(battles, hostIds, blocked, scope) {
     blocked = blocked || new Set();
     const rank = new Map((hostIds || []).map((id, i) => [id, i]));
     battles.forEach((b) => { if (b.venue === null || b.venue === undefined) { b.host = null; b.hostManual = false; } });
+    if (scope === 'all') return assignHostsAll(battles, rank, blocked);
     for (const idxs of venueGroups(battles).values()) {
       const used = new Set();
       const free = [];
@@ -389,14 +466,14 @@ const SG = (() => {
   }
 
   /* Разложить тур по площадкам и назначить ведущих (ручные назначения сбрасываются). */
-  function placeTour(tour, cfg, hostIds, blocked) {
+  function placeTour(tour, cfg, hostIds, blocked, scope) {
     const plan = venuePlan(tour.battles.length, cfg);
     tour.battles.forEach((b, i) => {
       b.venue = plan ? plan[i].venue : null;
       b.slot = plan ? plan[i].slot : null;
       b.host = null; b.hostManual = false;
     });
-    if (plan) assignHosts(tour.battles, hostIds, blocked);
+    if (plan) assignHosts(tour.battles, hostIds, blocked, scope);
     return tour;
   }
 
@@ -432,8 +509,11 @@ const SG = (() => {
       });
     }
     let p = finIds.length + 1;
+    const sameTop = finIds.length && finIds.every((id) => st.findIndex((r) => r.id === id) < finIds.length);
     st.filter((r) => !finIds.includes(r.id)).forEach((r) => {
-      out.push({ id: r.id, name: r.name, finalist: false, place: String(p), from: p, to: p, cup: fin ? cupPoints(p) : null, qPts: r.pts, qRank: r.rank, finalScore: null });
+      // равные с 4-го места делят места и кубковые очки (сумма очков за эти места поровну)
+      const from = sameTop ? r.placeFrom : p, to = sameTop ? r.placeTo : p;
+      out.push({ id: r.id, name: r.name, finalist: false, place: from === to ? String(from) : from + '–' + to, from, to, cup: fin ? cupPoints(from, to) : null, qPts: r.pts, qRank: r.rank, finalScore: null });
       p++;
     });
     const tieForFirst = !!(res && out.some((r) => r.finalist && r.from === 1 && r.to > 1));
@@ -442,6 +522,6 @@ const SG = (() => {
 
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 if (typeof module !== 'undefined') module.exports = SG;

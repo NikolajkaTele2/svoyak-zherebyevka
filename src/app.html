@@ -92,6 +92,8 @@ header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-cont
 .vgroup h3 { font-family: var(--font-display); font-weight: 400; font-size: 18px; display: flex; gap: 10px; align-items: baseline; }
 .vgroup h3 .muted { font-family: var(--font-body); font-size: 13px; }
 .flist td.name { min-width: 180px; }
+td.sep { font-size: 12px; color: var(--muted); white-space: nowrap; }
+td.sep.warn { color: var(--warn); }
 .ftable td.cup { font-weight: 700; color: var(--gold); font-size: 15px; }
 .flist tr.cur td { background: color-mix(in srgb, var(--good) 10%, transparent); }
 
@@ -220,11 +222,14 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   const newId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   /* Дополнить состояние полями новых версий (старые файлы турниров открываются без ошибок). */
   function normalize(s) {
-    s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['h2h', 'buch', 'score'] }, s.settings || {});
+    s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['score', 'buch'], h2hEach: true, hostScope: 'venue' }, s.settings || {});
     s.settings.venues = Object.assign({ count: 0, perVenue: 2, names: [] }, s.settings.venues || {});
     if (!Array.isArray(s.settings.venues.names)) s.settings.venues.names = [];
     if (!Array.isArray(s.hosts)) s.hosts = [];
-    s.settings.tiebreaks = SG.tbOrder(s); // «рейтинг» из старых версий → «личная встреча»
+    s.settings.tiebreaks = SG.tbOrder(s); // в списке только баллы и сила соперников; личная встреча — отдельная проверка
+    if (s.settings.h2hEach === undefined) s.settings.h2hEach = true;
+    if (!s.settings.hostScope) s.settings.hostScope = 'venue';
+    if (!s.shootouts || typeof s.shootouts !== 'object') s.shootouts = {};
     s.final = s.final || null;
     return s;
   }
@@ -253,9 +258,9 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         const p = st.players.find((x) => x.id === id);
         b.scores[id] = Math.round((p.rating - 1000) / 90 + r() * 30 - 10) * 10;
       }));
-      st.tours.push(SG.placeTour({ battles: d.battles }, st.settings.venues, st.hosts, SG.hostBlocked(st.tours, st.tours.length)));
+      st.tours.push(SG.placeTour({ battles: d.battles }, st.settings.venues, st.hosts, SG.hostBlocked(st.tours, st.tours.length), 'venue'));
     }
-    st.tours.push(SG.placeTour({ battles: SG.drawNext(st).battles }, st.settings.venues, st.hosts, SG.hostBlocked(st.tours, st.tours.length)));
+    st.tours.push(SG.placeTour({ battles: SG.drawNext(st).battles }, st.settings.venues, st.hosts, SG.hostBlocked(st.tours, st.tours.length), 'venue'));
     return st;
   }
 
@@ -267,6 +272,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   normalize(state);
 
   const venCfg = () => state.settings.venues;
+  const hostScope = () => state.settings.hostScope || 'venue';
   const hostIds = () => { const ids = new Set(state.players.map((p) => p.id)); return (state.hosts || []).filter((id) => ids.has(id)); };
   const venueName = (i) => ((state.settings.venues.names || [])[i] || '').trim() || 'Площадка ' + (i + 1);
 
@@ -506,7 +512,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   function drawTour() {
     try {
       const d = SG.drawNext(state);
-      state.tours.push(SG.placeTour({ battles: d.battles }, venCfg(), hostIds(), SG.hostBlocked(state.tours, state.tours.length)));
+      state.tours.push(SG.placeTour({ battles: d.battles }, venCfg(), hostIds(), SG.hostBlocked(state.tours, state.tours.length), hostScope()));
       save(true);
       ui.tab = 't' + (state.tours.length - 1); saveUi();
       render();
@@ -678,7 +684,9 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
             <label class="radio"><input type="radio" name="seed1" value="sequential" ${state.settings.seed1 === 'sequential' ? 'checked' : ''} ${state.tours.length || !canEdit() ? 'disabled' : ''}><span><b>Подряд</b> — 1-2-3, 4-5-6… Сильные сразу играют с сильными.</span></label>
           </div>
           <div class="field"><span class="lab">При равенстве очков сравнивать</span>
-            <div class="row">1. ${tbSelect(0)}</div><div class="row">2. ${tbSelect(1)}</div><div class="row">3. ${tbSelect(2)}</div>
+            <label class="radio"><input type="checkbox" id="h2hEach" ${state.settings.h2hEach !== false ? 'checked' : ''} ${canEdit() ? '' : 'disabled'}><span><b>Личная встреча перед каждым показателем</b> — если все равные играли друг с другом, решает их общий бой; кто остался равным, для них проверка повторяется на следующем шаге.</span></label>
+            <div class="row">1. ${tbSelect(0)}</div><div class="row">2. ${tbSelect(1)}</div>
+            <span class="muted" style="font-size:13px">Если совпало всё: за выход в тройку — перестрелка (результат вводится вручную), с 4-го места — места и кубковые очки делятся.</span>
           </div>
         </section>
         ${filesPanel()}
@@ -730,7 +738,12 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     const rest = state.players.filter((p) => !inList.has(p.id)).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     return `<section class="panel">
       <div class="row spread"><h2>Ведущие</h2><span class="muted num">${hs.length}</span></div>
-      <p class="muted">Ведущий боя — участник с той же площадки, который в этом бою отдыхает. Чем выше в списке, тем выше приоритет: из нескольких подходящих выбирается тот, кто выше. Один человек ведёт не больше одного боя за тур, а после двух туров подряд с ведением следующий тур отдыхает.</p>
+      <div class="field"><span class="lab">Откуда брать ведущего</span>
+        <label class="radio"><input type="radio" name="hscope" value="venue" ${hostScope() === 'venue' ? 'checked' : ''} ${ed ? '' : 'disabled'}><span><b>Со своей площадки</b> — из тех, кто играет на этой площадке в другом бою тура.</span></label>
+        <label class="radio"><input type="radio" name="hscope" value="all" ${hostScope() === 'all' ? 'checked' : ''} ${ed ? '' : 'disabled'}><span><b>Из всех свободных</b> — из всех, кто в это время не играет (бои с тем же номером на площадке идут одновременно). При равных условиях — с той же площадки.</span></label>
+        ${state.tours.length ? '<span class="muted" style="font-size:13px">Применится к следующей жеребьёвке. Для текущего тура — «Пересчитать ведущих» на его странице.</span>' : ''}
+      </div>
+      <p class="muted">Ведущий боя — участник, который в этом бою отдыхает. Чем выше в списке, тем выше приоритет: из нескольких подходящих выбирается тот, кто выше. Один человек ведёт не больше одного боя за тур, а после двух туров подряд с ведением следующий тур отдыхает.</p>
       ${hs.length ? `<ol class="hlist">${rows}</ol>` : '<p class="muted">Список пуст.</p>'}
       ${ed && rest.length ? `<div class="row"><select id="hostadd" aria-label="Участник"><option value="">Выберите участника…</option>${rest.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn" data-act="host-add">Добавить</button><button class="linkbtn" data-act="host-bulk-toggle">Вставить списком</button></div>` : ''}
       ${ed && ui.hostBulk ? `<div class="field"><label for="hostbulk">Имена по одному в строке, в порядке приоритета. Имена должны совпадать со списком участников.</label><textarea id="hostbulk" style="min-height:110px"></textarea><div class="row"><button class="btn" data-act="host-bulk-do">Добавить в конец списка</button></div></div>` : ''}
@@ -796,18 +809,18 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     const hasVenues = tour.battles.some((b) => b.venue !== null && b.venue !== undefined);
     const hostLine = (b, bi) => {
       if (b.venue === null || b.venue === undefined) return '';
-      const cands = SG.hostCandidates(tour.battles, bi, hs, blocked);
+      const cands = SG.hostCandidates(tour.battles, bi, hs, blocked, hostScope());
       const tired = b.host && blocked.has(b.host) ? '<small class="vnote warn">ведёт третий тур подряд</small>' : '';
       const from = (id) => { const c = cands.find((x) => x.id === id); return c ? 'бой ' + (c.battle + 1) : ''; };
       if (!canEdit()) {
         return `<div class="hostline${b.host ? '' : ' none'}"><span class="lab">Ведущий</span><span>${b.host ? esc(players[b.host].name) + ' <small class="muted">' + from(b.host) + '</small>' : 'не назначен'}</span>${tired}</div>`;
       }
-      const opt = (c) => `<option value="${c.id}"${c.id === b.host ? ' selected' : ''}>${esc(players[c.id].name)} · бой ${c.battle + 1}${c.rank !== null ? ' · №' + (c.rank + 1) : ''}</option>`;
+      const opt = (c) => `<option value="${c.id}"${c.id === b.host ? ' selected' : ''}>${esc(players[c.id].name)} · бой ${c.battle + 1}${hostScope() === 'all' && !c.sameVenue ? ' (' + esc(venueName(c.venue)) + ')' : ''}${c.rank !== null ? ' · №' + (c.rank + 1) : ''}</option>`;
       const listed = cands.filter((c) => c.rank !== null && !c.blocked), others = cands.filter((c) => c.rank === null && !c.blocked), rest = cands.filter((c) => c.blocked);
       const sel = `<select id="h-${t}-${bi}" data-host="${t}:${bi}" aria-label="Ведущий боя ${bi + 1}">
         <option value=""${b.host ? '' : ' selected'}>${cands.length ? '— не назначен —' : 'некому вести'}</option>
         ${listed.length ? `<optgroup label="Из списка ведущих">${listed.map(opt).join('')}</optgroup>` : ''}
-        ${others.length ? `<optgroup label="Другие отдыхающие на площадке">${others.map(opt).join('')}</optgroup>` : ''}
+        ${others.length ? `<optgroup label="${hostScope() === 'all' ? 'Другие свободные' : 'Другие отдыхающие на площадке'}">${others.map(opt).join('')}</optgroup>` : ''}
         ${rest.length ? `<optgroup label="Вели два тура подряд — отдыхают">${rest.map(opt).join('')}</optgroup>` : ''}
       </select>`;
       return `<div class="hostline${b.host ? '' : ' none'}"><label class="lab" for="h-${t}-${bi}">Ведущий</label>${sel}${b.hostManual && !tired ? '<small class="muted">вручную</small>' : ''}${tired}</div>`;
@@ -912,10 +925,10 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     }
     const st = SG.standings(state, 4);
     const players = byId();
-    const tbNote = st[2] && st[3] && st[2].pts === st[3].pts
-      ? `<div class="banner"><p>У 3-го и 4-го места равные очки (${fmt(st[2].pts)}). Финалист определён по дополнительным показателям: ${state.settings.tiebreaks.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}.</p></div>` : '';
+    const tbNote = st.shootout ? shootoutPanel(st) : st[2] && st[3] && st[2].pts === st[3].pts
+      ? `<div class="banner"><p>У 3-го и 4-го места равные очки (${fmt(st[2].pts)}). ${esc(st[2].name)} выше по показателю «${SG.SEP[st[2].sep] || '—'}».</p></div>` + shootoutPanel(st) : shootoutPanel(st);
     if (!state.final) {
-      return `<section style="display:grid;gap:14px"><div class="cta"><span class="eyebrow">Финал</span><h2>Финалисты</h2><ol style="margin:0;padding-left:20px">${st.slice(0, 3).map((r) => `<li><b>${esc(r.name)}</b> — <span class="num">${fmt(r.pts)}</span> оч.</li>`).join('')}</ol>${canEdit() ? '<button class="btn primary big" data-act="make-final">Сформировать финальный бой</button>' : ''}</div>${tbNote}</section>`;
+      return `<section style="display:grid;gap:14px"><div class="cta"><span class="eyebrow">Финал</span><h2>Финалисты</h2><ol style="margin:0;padding-left:20px">${st.slice(0, 3).map((r) => `<li><b>${esc(r.name)}</b> — <span class="num">${fmt(r.pts)}</span> оч.</li>`).join('')}</ol>${canEdit() && !st.shootout ? '<button class="btn primary big" data-act="make-final">Сформировать финальный бой</button>' : ''}${st.shootout ? '<p class="vnote warn">Сначала введите результат перестрелки ниже.</p>' : ''}</div>${tbNote}</section>`;
     }
     const changed = st.slice(0, 3).map((r) => r.id).sort().join() !== state.final.players.slice().sort().join();
     const b = state.final;
@@ -942,9 +955,26 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     </section>`;
   }
 
-  function tbCell(k, r) {
-    if (k === 'h2h') return r.h2h === null || r.h2h === undefined ? '—' : (r.h2h > 0 ? '+' : r.h2h < 0 ? '−' : '') + Math.abs(r.h2h);
-    return fmt(Math.round(SG.TB[k].get(r) * 100) / 100);
+  function tbCell(k, r) { return fmt(Math.round(SG.TB[k].get(r) * 100) / 100); }
+  const sepText = (r) => (r.sep ? SG.SEP[r.sep] : '');
+
+  /* Перестрелка за выход в тройку: полное равенство на границе 3–4 места. Оператор задаёт порядок вручную. */
+  function shootoutPanel(st) {
+    if (!qualDone()) return '';
+    const sh = st.shootout;
+    const pl = byId();
+    const saved = Object.entries(state.shootouts || {}).find(([k]) => st.some((r) => r.sep === 'shoot' && k.split(',').includes(r.id)));
+    if (!sh) {
+      if (!saved || !canEdit()) return '';
+      return `<div class="banner"><p>Порядок за выход в тройку задан по перестрелке: ${saved[1].map((id) => esc(pl[id] ? pl[id].name : id)).join(' → ')}.</p><button class="linkbtn" data-act="shoot-reset" data-key="${esc(saved[0])}">Отменить</button></div>`;
+    }
+    const draft = ui.shootDraft && ui.shootDraft.key === sh.key ? ui.shootDraft.ids : sh.ids;
+    const list = draft.map((id, i) => `<li class="hrow"><span class="num hrank">${sh.from + i}</span><span class="hname">${esc(pl[id].name)}</span>${canEdit() ? `<span class="hbtns"><button class="iconbtn" data-smove="${i}:-1" ${i ? '' : 'disabled'} aria-label="Выше">↑</button><button class="iconbtn" data-smove="${i}:1" ${i < draft.length - 1 ? '' : 'disabled'} aria-label="Ниже">↓</button></span>` : ''}</li>`).join('');
+    return `<div class="banner warn" style="display:grid;gap:10px;justify-items:start">
+      <p><b>Нужна перестрелка за выход в финал.</b> У игроков на местах ${sh.from}–${sh.to} совпало всё: очки, личные встречи, сумма баллов и сила соперников. Проведите перестрелку и расставьте их по её итогам — первые займут места до 3-го включительно, остальные поделят оставшиеся места.</p>
+      <ol class="hlist" style="width:100%;max-width:420px">${list}</ol>
+      ${canEdit() ? `<button class="btn primary" data-act="shoot-save" data-key="${esc(sh.key)}">Сохранить порядок</button>` : ''}
+    </div>`;
   }
 
   function viewTable() {
@@ -962,13 +992,14 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         const tip = 'Соперники: ' + opps.map((o) => rk[o] + '. ' + nm[o]).join(', ');
         return `<td class="r"><span class="tcell"><span class="opps" title="${esc(tip)}" data-opps="${opps.join(',')}">${opps.map((o) => `<span>${rk[o]}</span>`).join('')}</span><span class="tp"><b>${fmt(x.pts)}</b><small>бой ${x.battle} · ${x.score}</small></span></span></td>`;
       }).join('');
-      return `<tr id="row-${r.id}" class="${fin && r.rank <= 3 ? 'fin' : ''}"><td class="r num">${r.rank}</td><td class="name">${esc(r.name)}${fin && r.rank <= 3 ? ' <span class="chip">финал</span>' : ''}</td><td class="r num"><b>${fmt(r.pts)}</b></td>${cells}${tb.map((k) => `<td class="r num">${tbCell(k, r)}</td>`).join('')}</tr>`;
+      return `<tr id="row-${r.id}" class="${fin && r.rank <= 3 ? 'fin' : ''}"><td class="r num">${esc(r.place)}</td><td class="name">${esc(r.name)}${fin && r.rank <= 3 ? ' <span class="chip">финал</span>' : ''}</td><td class="r num"><b>${fmt(r.pts)}</b></td>${cells}${tb.map((k) => `<td class="r num">${tbCell(k, r)}</td>`).join('')}<td class="sep${r.sep === 'rating' && r.rank <= 4 && fin ? ' warn' : ''}">${sepText(r) ? '↓ ' + sepText(r) : ''}</td></tr>`;
     }).join('');
     return `<section style="display:grid;gap:14px">
       <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Турнирная таблица</span><h2>После ${done} ${plural(done, 'тура', 'туров', 'туров')}</h2></div>
       <div class="row"><button class="btn" data-act="copy-table">Скопировать для таблиц</button><button class="btn" data-act="xlsx-table">Скачать Excel</button><button class="btn" data-act="xlsx-all">Весь турнир в Excel</button></div></div>
-      <p class="muted">Порядок: очки, затем ${tb.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}. «Сила соперников» — средние очки всех, с кем участник играл в боях. «Личн.» — результат личных встреч среди участников с равными показателями (+1 за каждого, кого обошёл в общем бою, −1 за каждого, кому уступил); «—», если не применялась. Если всё совпало — выше тот, у кого выше исходный рейтинг. В клетках туров: слева мелко — места соперников в этой таблице (наведите или нажмите, чтобы подсветить их строки), справа — очки, номер боя и набранные баллы.</p>
-      <div class="tablewrap"><table><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Очки</th><th class="r">Т1</th><th class="r">Т2</th><th class="r">Т3</th><th class="r">Т4</th>${tb.map((k) => `<th class="r">${SG.TB[k].short}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="muted">Порядок: очки${state.settings.h2hEach !== false ? ', перед каждым показателем — личная встреча (если все равные играли друг с другом)' : ''}, затем ${tb.map((k) => SG.TB[k].label.toLowerCase()).join(', ')}. «Сила соперников» — средние очки всех, с кем участник играл в боях. «Решено» — чем игрок оказался выше следующего с теми же очками; «делят» — полное равенство, места и кубковые очки делятся. В клетках туров: слева мелко — места соперников в этой таблице (наведите или нажмите, чтобы подсветить их строки), справа — очки, номер боя и набранные баллы.</p>
+      ${shootoutPanel(st)}
+      <div class="tablewrap"><table><thead><tr><th class="r">Место</th><th>Участник</th><th class="r">Очки</th><th class="r">Т1</th><th class="r">Т2</th><th class="r">Т3</th><th class="r">Т4</th>${tb.map((k) => `<th class="r">${SG.TB[k].short}</th>`).join('')}<th>Решено</th></tr></thead><tbody>${rows}</tbody></table></div>
     </section>`;
   }
 
@@ -1000,10 +1031,10 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       <p>Перед 4-м туром у участника не больше 9 бывших соперников, а всего в турнире 25–48 человек. Свободных соперников остаётся с запасом. Мы проверили алгоритм на 3600 смоделированных турнирах от 25 до 48 участников: повторных встреч не было ни разу. Если всё же возникнет повтор, приложение предупредит и подсветит бой.</p></section>
       <section><h3>6. Площадки и ведущие</h3>
       <p>Оператор задаёт число площадок (1–10), сколько боёв проходит на одной площадке (1–4) и их названия. Бои раздаются по площадкам по кругу: при 10 боях и 5 площадках на первой идут бои 1 и 6, на второй — 2 и 7 и так далее. Так нагрузка распределяется поровну. Если мест меньше, чем боёв, приложение предупредит.</p>
-      <p>Ведущий боя — участник с той же площадки, который в этом бою отдыхает: бой 1 на первой площадке ведёт кто-то из боя 6, а бой 6 — кто-то из боя 1. Из подходящих выбирается тот, кто выше в списке ведущих. Один человек ведёт не больше одного боя за тур, а кто вёл в двух турах подряд, в следующем туре (и в финале после туров 3 и 4) автоматически не назначается. Сначала приложение старается, чтобы ведущий был у каждого боя. Ведущего можно заменить вручную в карточке боя. Ведущий финала — первый из списка, кто не играет в финале.</p></section>
+      <p>Ведущий боя — участник, который в этом бою отдыхает. По умолчанию — с той же площадки: бой 1 на первой площадке ведёт кто-то из боя 6, а бой 6 — кто-то из боя 1. Из подходящих выбирается тот, кто выше в списке ведущих. Один человек ведёт не больше одного боя за тур, а кто вёл в двух турах подряд, в следующем туре (и в финале после туров 3 и 4) автоматически не назначается. Сначала приложение старается, чтобы ведущий был у каждого боя. Ведущего можно заменить вручную в карточке боя. Ведущий финала — первый из списка, кто не играет в финале.</p></section>
       <section><h3>7. Равенство очков и финал</h3>
-      <p>При равных очках сравниваются три дополнительных показателя в выбранном порядке (по умолчанию так): сила соперников (средние очки всех, с кем играл), сумма баллов, личная встреча. Порядок меняется на вкладке «Участники». Если совпало всё — выше тот, у кого выше исходный рейтинг. В финал выходят три лучших участника таблицы после 4-го тура.</p>
-      <p><b>Личная встреча.</b> Если двое с равными показателями играли в одном бою, выше тот, кто набрал в том бою больше баллов, даже если ни один из них бой не выиграл. Если равных трое и больше, личная встреча применяется, только когда каждый из них играл с каждым: тогда +1 за каждого из группы, кого обошёл в общем бою, и −1 за каждого, кому уступил. Если хотя бы одна пара не встречалась, личная встреча пропускается и решает следующий показатель — так не бывает спорных случаев, куда ставить того, кто ни с кем не играл. Одинаковые баллы в общем бою преимущества не дают.</p></section>
+      <p>Игроки с равными очками расставляются по шагам. Перед каждым шагом проверяется личная встреча: если все, кто сейчас равен, играли друг с другом, решает их общий бой (+1 за каждого из группы, кого обошёл в общем бою, −1 — кому уступил). Если хоть одна пара не встречалась или личная встреча никого не развела — решает следующий показатель: сумма баллов, затем сила соперников (порядок меняется в настройках). Кто остался равным после показателя, для них снова проверяется личная встреча — в маленькой группе шанс, что все играли друг с другом, выше.</p>
+      <p>Если совпало всё: при борьбе за выход в тройку — перестрелка, её итог оператор вводит вручную (те, кто не попал в тройку, делят оставшиеся места); с 4-го места и ниже — места делятся, кубковые очки за эти места суммируются и делятся поровну. В таблице столбец «Решено» показывает, чем игрок оказался выше следующего. В финал выходят три лучших участника таблицы после 4-го тура.</p></section>
       <section><h3>8. Итог и кубковые очки</h3>
       <p>Места 1–3 определяются финальным боем, остальные — таблицей отборочных туров. Кубковые очки: 1 место — Ф, 2 — 25, 3 — 20, 4 — 17, 5 — 15, 6 — 14, 7 — 13 и далее на одно меньше до 19 места (1 очко); с 20 места — 0. Если места в финале поделены, очки усредняются: 2–3 место — по 22,5. Ничью за первое место нужно разрешить перестрелкой. Итоговую таблицу, турнирную таблицу и каждый тур можно скачать в Excel и загрузить в Google Таблицы.</p></section>
     </article>`;
@@ -1069,13 +1100,15 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     } else if (el.name === 'seed1') { state.settings.seed1 = el.value; save(); }
     else if (el.id === 'evenb') { state.settings.evenBattles = el.checked; save(); render(); }
     else if (el.id === 'vcount') { venCfg().count = Number(el.value) || 0; save(); render(); }
+    else if (el.name === 'hscope') { state.settings.hostScope = el.value; save(); render(); }
+    else if (el.id === 'h2hEach') { state.settings.h2hEach = el.checked; save(); render(); }
     else if (el.id === 'vper') { venCfg().perVenue = Number(el.value) || 1; save(); render(); }
     else if (el.dataset.vname !== undefined) { refreshVenueCheck(); }
     else if (el.dataset.host) {
       const [t, bi] = el.dataset.host.split(':').map(Number);
       const b = state.tours[t].battles[bi];
       b.host = el.value || null; b.hostManual = true;
-      SG.assignHosts(state.tours[t].battles, hostIds(), SG.hostBlocked(state.tours, t));
+      SG.assignHosts(state.tours[t].battles, hostIds(), SG.hostBlocked(state.tours, t), hostScope());
       save(); render();
     } else if (el.dataset.fhost) {
       state.final.host = el.value || null; state.final.hostManual = true; save(); render();
@@ -1270,9 +1303,9 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   function standingsSheet() {
     const st = SG.standings(state), tb = state.settings.tiebreaks;
     const done = state.tours.filter(SG.tourComplete).length;
-    const rows = [['Место', 'Участник', 'Очки', 'Т1', 'Т2', 'Т3', 'Т4', ...tb.map((k) => SG.TB[k].label)].map(xH)];
-    st.forEach((r) => rows.push([r.rank, r.name, r.pts, ...[0, 1, 2, 3].map((t) => (r.perTour[t] ? r.perTour[t].pts : null)), ...tb.map((k) => (k === 'h2h' ? (r.h2h === null ? null : r.h2h) : Math.round(SG.TB[k].get(r) * 100) / 100))]));
-    return { name: 'Таблица после ' + done + ' ' + plural(done, 'тура', 'туров', 'туров'), rows, freeze: 1, cols: [7, 26, 7, 6, 6, 6, 6, 16, 16, 16] };
+    const rows = [['Место', 'Участник', 'Очки', 'Т1', 'Т2', 'Т3', 'Т4', ...tb.map((k) => SG.TB[k].label), 'Решено (выше следующего по)'].map(xH)];
+    st.forEach((r) => rows.push([placeVal(r.place), r.name, r.pts, ...[0, 1, 2, 3].map((t) => (r.perTour[t] ? r.perTour[t].pts : null)), ...tb.map((k) => Math.round(SG.TB[k].get(r) * 100) / 100), sepText(r) || null]));
+    return { name: 'Таблица после ' + done + ' ' + plural(done, 'тура', 'туров', 'туров'), rows, freeze: 1, cols: [7, 26, 7, 6, 6, 6, 6, 14, 16, 22] };
   }
   function finalSheet() {
     const f = SG.finalStandings(state);
@@ -1347,7 +1380,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         A.players[ia] = id; B.players[ib] = ui.sel.id;
         A.scores = Object.fromEntries(A.players.map((x) => [x, null]));
         B.scores = Object.fromEntries(B.players.map((x) => [x, null]));
-        SG.assignHosts(state.tours[t].battles, hostIds(), SG.hostBlocked(state.tours, t)); // состав площадок изменился — ведущие тоже
+        SG.assignHosts(state.tours[t].battles, hostIds(), SG.hostBlocked(state.tours, t), hostScope()); // состав площадок изменился — ведущие тоже
         ui.sel = null; save(true);
       }
       return render();
@@ -1364,6 +1397,15 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       const again = document.querySelector(`[data-hmove="${j}:${d}"]`) || document.querySelector(`[data-hmove="${j}:${-d}"]`);
       if (again) again.focus();
       return;
+    }
+    const sm = e.target.closest('[data-smove]');
+    if (sm) {
+      const sh = SG.standings(state, 4).shootout; if (!sh) return;
+      const ids = (ui.shootDraft && ui.shootDraft.key === sh.key ? ui.shootDraft.ids : sh.ids).slice();
+      const [i, d] = sm.dataset.smove.split(':').map(Number), j = i + d;
+      if (j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      ui.shootDraft = { key: sh.key, ids }; return render();
     }
     const hd = e.target.closest('[data-hdel]');
     if (hd) { const hs = hostIds(); hs.splice(Number(hd.dataset.hdel), 1); state.hosts = hs; save(); return render(); }
@@ -1431,16 +1473,25 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       const ta = document.getElementById('hostbulk'); if (ta) ta.value = missed.join('\n');
       return toast('Добавлено: ' + added + '. Не найдены в списке участников (оставлены в поле): ' + missed.length);
     }
+    if (act === 'shoot-save') {
+      const st = SG.standings(state, 4), sh = st.shootout;
+      if (!sh) return;
+      const ids = ui.shootDraft && ui.shootDraft.key === sh.key ? ui.shootDraft.ids : sh.ids;
+      state.shootouts = Object.assign({}, state.shootouts, { [sh.key]: ids.slice() });
+      ui.shootDraft = null; save(true); render();
+      return toast('Порядок по перестрелке сохранён');
+    }
+    if (act === 'shoot-reset') { const k2 = a.dataset.key; const o = Object.assign({}, state.shootouts); delete o[k2]; state.shootouts = o; save(true); return render(); }
     if (act === 'vview') { ui.vview = a.dataset.v; saveUi(); return render(); }
     if (act === 're-host') {
       const tn = Number(a.dataset.t), tr = state.tours[tn];
       tr.battles.forEach((b) => { b.hostManual = false; });
-      SG.assignHosts(tr.battles, hostIds(), SG.hostBlocked(state.tours, tn)); save(true); render();
+      SG.assignHosts(tr.battles, hostIds(), SG.hostBlocked(state.tours, tn), hostScope()); save(true); render();
       return toast('Ведущие назначены заново по списку');
     }
     if (act === 're-place') {
       const tn = Number(a.dataset.t);
-      SG.placeTour(state.tours[tn], venCfg(), hostIds(), SG.hostBlocked(state.tours, tn)); save(true); render();
+      SG.placeTour(state.tours[tn], venCfg(), hostIds(), SG.hostBlocked(state.tours, tn), hostScope()); save(true); render();
       return toast('Тур разложен по площадкам заново');
     }
     if (act === 'add-one') { state.players.push({ id: uid(), name: 'Участник ' + (state.players.length + 1), rating: 0 }); state.example = false; save(); return render(); }

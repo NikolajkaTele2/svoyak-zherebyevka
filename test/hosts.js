@@ -61,4 +61,36 @@ for (let N = 25; N <= 48; N++) {
   }
 }
 assert(bad === 0, 'нарушений в полных турнирах: ' + bad);
-console.log('OK: площадки и ведущие');
+// 7. Ведущие из всех свободных: человек не играет в эту волну, ведёт не больше одного боя,
+//    боёв с ведущим не меньше, чем при подборе только со своей площадки; своя площадка — в приоритете
+let badAll = 0, covVenue = 0, covAll = 0, same = 0, hostedAll = 0;
+for (let N = 25; N <= 48; N++) {
+  for (const K of [2, 3]) {
+    const st2 = { settings: {}, players: [], tours: [] };
+    for (let i = 0; i < N; i++) st2.players.push({ id: 'q' + i, name: 'Q' + i, rating: 1000 - i });
+    const hl = st2.players.filter((_, i) => i % 3 !== 1).map((p) => p.id);
+    const d = SG.drawNext(st2);
+    const cfg = { count: Math.ceil(d.battles.length / K), perVenue: K };
+    const tv = SG.placeTour({ battles: JSON.parse(JSON.stringify(d.battles)) }, cfg, hl, new Set(), 'venue');
+    const ta = SG.placeTour({ battles: JSON.parse(JSON.stringify(d.battles)) }, cfg, hl, new Set(), 'all');
+    covVenue += tv.battles.filter((b) => b.host).length; covAll += ta.battles.filter((b) => b.host).length;
+    const used = ta.battles.map((b) => b.host).filter(Boolean);
+    if (new Set(used).size !== used.length) badAll++;
+    ta.battles.forEach((b) => {
+      if (!b.host) return;
+      hostedAll++;
+      const own = ta.battles.find((o) => o.players.includes(b.host));
+      if (!own || own.slot === b.slot) badAll++;
+      if (own && own.venue === b.venue) same++;
+    });
+  }
+}
+assert(badAll === 0, 'ведущий из всех свободных: нарушений ' + badAll);
+assert(covAll >= covVenue, 'из всех свободных боёв с ведущим не меньше: ' + covAll + ' против ' + covVenue);
+// кандидаты в режиме «все свободные» — только не играющие в эту волну
+tour = { battles: mk(10) };
+SG.placeTour(tour, { count: 5, perVenue: 2 }, [], new Set(), 'all');
+const cands = SG.hostCandidates(tour.battles, 0, [], new Set(), 'all');
+assert(cands.length === 15 && cands.every((c) => tour.battles[c.battle].slot === 2), 'кандидаты для боя 1 — все из боёв 6–10');
+assert(cands[0].sameVenue, 'своя площадка первой при равном приоритете');
+console.log('OK: площадки и ведущие (из всех свободных: с ведущим ' + covAll + ' боёв против ' + covVenue + ' со своей площадки; ' + Math.round(same / hostedAll * 100) + '% ведут на своей площадке)');

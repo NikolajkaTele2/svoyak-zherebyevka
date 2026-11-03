@@ -1,52 +1,77 @@
-// Личная встреча и правило «два тура подряд вёл — следующий отдыхает».
+// Дополнительные показатели: личная встреча перед каждым показателем, перестрелка за тройку,
+// делёж мест с 4-го, отдых ведущих.
 const SG = require('../src/engine.js');
 const assert = (c, m) => { if (!c) { console.error('ОШИБКА:', m); process.exit(1); } };
 const B = (players, scores) => ({ players, scores: Object.fromEntries(players.map((p, i) => [p, scores[i]])) });
-const st = (tours, tiebreaks) => ({
-  settings: { tiebreaks },
-  players: ['a', 'b', 'c', 'd', 'e', 'f'].map((id, i) => ({ id, name: id.toUpperCase(), rating: 100 - i })),
-  tours,
-});
-const ids = (s) => SG.standings(s).map((r) => r.id).join('');
+const mkState = (ids, tours, settings) => ({ settings: settings || {}, players: ids.map((id, i) => ({ id, name: id.toUpperCase(), rating: 100 - i })), tours });
 
-// Двое равных встречались: выше тот, у кого в общем бою больше баллов, даже если он там был вторым.
-// Т1: [a b c] 100/50/0, [d e f] 100/50/0. Т2: [c d e] 100/50/0, [a b f] 100/50/0.
-// Итого a=4, d=3, b=2, c=2, e=1, f=0. b и c встречались в Т1, b набрал больше (50 > 0, места 2 и 3).
-const pairTours = [
+// 1. Двое равных встречались: выше тот, у кого больше баллов в общем бою, даже если сумма баллов меньше
+let st = mkState(['a', 'b', 'c', 'd', 'e', 'f'], [
   { battles: [B(['a', 'b', 'c'], [100, 50, 0]), B(['d', 'e', 'f'], [100, 50, 0])] },
-  { battles: [B(['c', 'd', 'e'], [100, 50, 0]), B(['a', 'b', 'f'], [100, 50, 0])] },
-];
-let r = SG.standings(st(pairTours, ['h2h', 'buch', 'score']));
-assert(ids(st(pairTours, ['h2h', 'buch', 'score'])) === 'adbcef', 'личная встреча первой: ' + ids(st(pairTours, ['h2h', 'buch', 'score'])));
-assert(r.find((x) => x.id === 'b').h2h === 1 && r.find((x) => x.id === 'c').h2h === -1, 'мини-таблица +1/−1');
-// у b и c равны и сила соперников (2,5), и сумма баллов (100) — значит, при порядке по умолчанию решает личная встреча
-assert(ids(st(pairTours, ['buch', 'score', 'h2h'])) === 'adbcef', 'личная встреча третьей');
+  { battles: [B(['c', 'd', 'a'], [50, 100, 0]), B(['e', 'b', 'f'], [300, 250, 0])] }, // a и b по 2 очка; у b сумма баллов больше
+]);
+let t = SG.standings(st);
+const ia = t.findIndex((r) => r.id === 'a'), ib = t.findIndex((r) => r.id === 'b');
+assert(t[ia].pts === t[ib].pts && ia < ib && t[ia].sep === 'h2h', 'личная встреча решает пару: ' + t.map((r) => r.id + r.pts + (r.sep || '')).join(' '));
+t = SG.standings({ ...st, settings: { h2hEach: false } });
+assert(t.findIndex((r) => r.id === 'b') < t.findIndex((r) => r.id === 'a'), 'выключенная личная встреча');
 
-// Трое равных, не все встречались: личная встреча пропускается, решает следующий показатель.
-// Т2': [b d f] 100/50/0, [c a e] 100/50/0 → a=3, b=3, d=3 (a–b встречались, b–d встречались, a–d нет)
-const triTours = [pairTours[0], { battles: [B(['b', 'd', 'f'], [100, 50, 0]), B(['c', 'a', 'e'], [100, 50, 0])] }];
-r = SG.standings(st(triTours, ['h2h', 'score', 'buch']));
-const top3 = r.slice(0, 3);
-assert(top3.every((x) => x.h2h === null), 'для неполной тройки личная встреча не применяется');
-const byScore = top3.slice().sort((x, y) => y.score - x.score).map((x) => x.id).join('');
-assert(top3.map((x) => x.id).join('') === byScore || top3[0].score === top3[1].score, 'решает сумма баллов');
+// 2. Свойства на случайных турнирах: каждый стык «решено по X» действительно решён X
+let s = 12345; const rnd = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+let deepH2H = 0, sepsChecked = 0;
+for (let k = 0; k < 150; k++) {
+  const N = 25 + (k % 12);
+  const S = { settings: { seed1: 'pots' }, players: [], tours: [] };
+  for (let i = 0; i < N; i++) S.players.push({ id: 'p' + i, name: 'P' + i, rating: 1000 + Math.round(rnd() * 900) });
+  for (let r = 0; r < 4; r++) {
+    const d = SG.drawNext(S);
+    d.battles.forEach((b) => b.players.forEach((id) => (b.scores[id] = Math.round(rnd() * 8 - 2) * 20)));
+    S.tours.push({ battles: d.battles });
+  }
+  const T2 = SG.standings(S);
+  for (let i = 0; i + 1 < T2.length; i++) {
+    const a = T2[i], b = T2[i + 1];
+    assert(a.pts >= b.pts - 1e-9, 'очки по убыванию');
+    if (Math.abs(a.pts - b.pts) > 1e-9) { assert(!a.sep, 'нет пометки между разными очками'); continue; }
+    sepsChecked++;
+    assert(a.sep, 'между равными по очкам всегда указано, чем решено');
+    if (a.sep === 'score') assert(a.score > b.score, 'баллы решают');
+    if (a.sep === 'buch') assert(a.score === b.score && a.opp > b.opp, 'сила соперников решает при равных баллах');
+    if (a.sep === 'h2h') {
+      const groupSize = T2.filter((r) => Math.abs(r.pts - a.pts) < 1e-9).length;
+      if (a.score === b.score && groupSize > 2) deepH2H++;
+    }
+  }
+}
+assert(deepH2H > 0, 'личная встреча срабатывает на глубоком шаге хотя бы иногда');
 
-// Трое равных, все встречались (в одном бою): порядок по баллам того боя
-const tie3 = [
-  { battles: [B(['a', 'b', 'c'], [90, 60, 30]), B(['d', 'e', 'f'], [100, 50, 0])] }, // a2 b1 c0
-  { battles: [B(['a', 'd', 'e'], [0, 50, 100]), B(['b', 'c', 'f'], [0, 100, 50])] },  // a0 e2 d1 ; c2 f1 b0
-];
-// a=2, b=1, c=2, d=3, e=3, f=1 → группы: d,e (3) — встречались в Т1 (d 100 > e 50) и Т2 (e 100 > d 50)?
-// d и e играли дважды — так не бывает в настоящей жеребьёвке; проверяем a,c (2): встречались в Т1, a 90 > c 30
-r = SG.standings(st(tie3, ['h2h', 'buch', 'score']));
-const ia = r.findIndex((x) => x.id === 'a'), ic = r.findIndex((x) => x.id === 'c');
-assert(ia < ic && ia + 1 === ic, 'a выше c по личной встрече');
+// 3. Полное равенство на границе тройки → перестрелка; с 4-го места → делят места и кубковые очки
+const ids = ['a', 'b', 'c', 'd', 'x1', 'x2', 'y1', 'y2', 'z1', 'z2', 'w1', 'w2'];
+st = mkState(ids, [{ battles: [B(['a', 'x1', 'x2'], [100, 50, 0]), B(['b', 'y1', 'y2'], [100, 50, 0]), B(['c', 'z1', 'z2'], [100, 50, 0]), B(['d', 'w1', 'w2'], [100, 50, 0])] }]);
+t = SG.standings(st);
+assert(t.shootout && t.shootout.ids.length === 4 && t.shootout.from === 1 && t.shootout.to === 4, 'нужна перестрелка за выход в тройку');
+assert(t.slice(4, 8).every((r) => r.place === '5–8') && t[4].sep === 'shared', 'места 5–8 делятся');
+st.shootouts = { [SG.groupKey(['a', 'b', 'c', 'd'])]: ['d', 'c', 'b', 'a'] };
+t = SG.standings(st);
+assert(!t.shootout && t.slice(0, 4).map((r) => r.id).join('') === 'dcba' && t[0].sep === 'shoot', 'порядок из перестрелки');
+assert(t[3].place === '4', 'проигравший перестрелку — 4-й');
+st.final = { players: ['d', 'c', 'b'], scores: { d: 300, c: 200, b: 100 } };
+const f = SG.finalStandings(st);
+assert(f.rows[3].id === 'a' && f.rows[3].cup === 17, '4-е место — 17 очков');
+assert(f.rows.slice(4, 8).every((r) => r.place === '5–8' && r.cup === 13.5), 'делёж 5–8: (15+14+13+12)/4 = 13,5');
+assert(f.rows.slice(8).every((r) => r.place === '9–12' && r.cup === 9.5), 'делёж 9–12: (11+10+9+8)/4 = 9,5');
 
-// Устаревший «рейтинг» в настройках заменяется личной встречей
-assert(SG.tbOrder({ settings: { tiebreaks: ['rating', 'buch', 'score'] } }).join() === 'h2h,buch,score', 'миграция rating → h2h');
-assert(SG.tbOrder({ settings: { tiebreaks: ['buch', 'score', 'rating'] } }).join() === 'h2h,buch,score', 'миграция: личная встреча первой');
-assert(SG.tbOrder({ settings: { tiebreaks: ['score', 'h2h', 'buch'] } }).join() === 'score,h2h,buch', 'выбранный порядок сохраняется');
-assert(SG.tbOrder({ settings: {} }).join() === 'h2h,buch,score', 'порядок по умолчанию');
+// 4. Пятеро равных за тройку: после перестрелки двое оставшихся делят 4–5 место
+const ids5 = ['a', 'b', 'c', 'd', 'e', 'q1', 'q2', 'q3', 'q4', 'q5', 'q6', 'q7', 'q8', 'q9', 'q10'];
+st = mkState(ids5, [{ battles: ['a', 'b', 'c', 'd', 'e'].map((x, i) => B([x, 'q' + (2 * i + 1), 'q' + (2 * i + 2)], [100, 50, 0])) }]);
+st.shootouts = { [SG.groupKey(['a', 'b', 'c', 'd', 'e'])]: ['e', 'd', 'c', 'b', 'a'] };
+t = SG.standings(st);
+assert(t[3].place === '4–5' && t[4].place === '4–5', 'не попавшие в тройку после перестрелки делят места');
+
+// 5. Порядок показателей: старые настройки
+assert(SG.tbOrder({ settings: { tiebreaks: ['h2h', 'buch', 'score'] } }).join() === 'buch,score', 'h2h убирается из списка');
+assert(SG.tbOrder({ settings: { tiebreaks: ['rating', 'score', 'buch'] } }).join() === 'score,buch', 'rating убирается');
+assert(SG.tbOrder({ settings: {} }).join() === 'score,buch', 'по умолчанию: баллы, сила соперников');
 
 // Ведущие: кто вёл в двух предыдущих турах подряд, в следующем туре не назначается
 const T = (hosts) => ({ battles: hosts.map((h) => ({ players: [], host: h })) });
@@ -64,7 +89,7 @@ for (let N = 25; N <= 48; N++) {
   const hl = s.players.map((p) => p.id); // все в списке ведущих
   for (let t = 0; t < 4; t++) {
     const d = SG.drawNext(s);
-    const tr = SG.placeTour({ battles: d.battles }, s.settings.venues, hl, SG.hostBlocked(s.tours, t));
+    const tr = SG.placeTour({ battles: d.battles }, s.settings.venues, hl, SG.hostBlocked(s.tours, t), 'venue');
     tr.battles.forEach((b) => { b.players.forEach((id, k) => (b.scores[id] = (k * 37 + t * 11 + N) % 90)); total++; if (b.host) hosted++; });
     s.tours.push(tr);
   }
@@ -74,4 +99,4 @@ for (let N = 25; N <= 48; N++) {
   }
 }
 assert(violations === 0, 'три тура подряд: ' + violations);
-console.log('OK: личная встреча и отдых ведущих (бои с ведущим: ' + hosted + ' из ' + total + ')');
+console.log('OK: личная встреча на каждом шаге (стыков: ' + sepsChecked + ', глубоких срабатываний: ' + deepH2H + '), перестрелка, делёж мест, отдых ведущих (с ведущим ' + hosted + ' из ' + total + ')');
