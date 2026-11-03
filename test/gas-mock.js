@@ -26,7 +26,8 @@ function makeEnv() {
         if (fc && c <= fc && c + nc - 1 > fc) fail('объединение поперёк закреплённых столбцов');
       });
     },
-    setColumnWidth(c, w) { this.widths[c] = w; }, setRowHeight(r, h) { this.heights[r] = h; },
+    setColumnWidth(c, w) { if (c < 1 || c > this.maxC) fail('Эти столбцы выходят за определенные границы: ' + c); this.widths[c] = w; },
+    setRowHeight(r, h) { if (r < 1 || r > this.maxR) fail('строка за границей: ' + r); this.heights[r] = h; },
     setTabColor(c) { this.tab = c; },
     getRange(r, c, nr, nc) {
       if (nc === undefined || nr === undefined) fail('getRange без размеров');

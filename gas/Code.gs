@@ -143,7 +143,7 @@ function grid_() {
 }
 
 function paint_(sh, g, widths, heights, frozen) {
-  const R = Math.max(g.R, 1), C = Math.max(g.C, 1);
+  const R = Math.max(g.R, 1, ...Object.keys(heights || {}).map(Number)), C = Math.max(g.C, 1, ...Object.keys(widths || {}).map(Number));
   sh.clear();
   sh.clearConditionalFormatRules();
   sh.setFrozenRows(0); sh.setFrozenColumns(0);
