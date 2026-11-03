@@ -217,6 +217,8 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   const uid = () => 'p' + Math.random().toString(36).slice(2, 9);
   const LS_KEY = 'sg-swiss-state-v1';
   const LS_UI = 'sg-swiss-ui-v1';
+  const LS_SHEET = 'sg-swiss-sheet-v1'; // последняя ссылка и ключ Google Таблицы — подставляются в новые турниры
+  const GAS_CODE = /*GAS*/'';
 
   /* ---------- состояние ---------- */
   const newId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -230,8 +232,17 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     if (s.settings.h2hEach === undefined) s.settings.h2hEach = true;
     if (!s.settings.hostScope) s.settings.hostScope = 'venue';
     if (!s.shootouts || typeof s.shootouts !== 'object') s.shootouts = {};
+    let lastSheet = {};
+    try { lastSheet = JSON.parse(localStorage.getItem(LS_SHEET) || '{}') || {}; } catch (e) {}
+    s.settings.sheet = Object.assign({ url: lastSheet.url || '', key: lastSheet.key || '', tour: guessTour(s.name), live: true }, s.settings.sheet || {});
     s.final = s.final || null;
     return s;
+  }
+  /* Номер отборочного тура сезона из названия: «1 Отборочный тур…», «Тур 2…» */
+  function guessTour(name) {
+    const n = String(name || '');
+    const m = n.match(/(?:^|\D)([1-4])\s*(?:-?(?:й|ый|ой))?\s*отбороч/i) || n.match(/отбороч\S*\s+тур\D{0,3}([1-4])(?!\d)/i) || n.match(/(?:^|\s)тур\s*([1-4])(?!\d)/i);
+    return m ? Number(m[1]) : 0;
   }
   const emptyState = () => normalize({ v: 1, id: newId(), savedAt: Date.now(), name: 'Своя игра', example: false, players: [], tours: [], final: null });
 
@@ -409,6 +420,136 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   })();
   addEventListener('pagehide', () => { if (fsync.timer) writeNow(); });
 
+
+  /* ---------- заливка в Google Таблицу (скрипт gas/Code.gs в таблице сезона) ---------- */
+  const gs = { status: 'idle', at: null, timer: null, retry: null, busy: false, again: false, lastSig: null, other: null, check: null };
+  const sheetCfg = () => state.settings.sheet;
+  const sheetReady = () => { const c = sheetCfg(); return !!(c && /^https:\/\/script\.google(usercontent)?\.com\//.test(c.url) && c.key && c.tour >= 1 && c.tour <= 4); };
+  const sheetOn = () => sheetReady() && !state.example && canEdit();
+  function scheduleSheet(now) {
+    clearTimeout(gs.timer); gs.timer = null;
+    if (!sheetOn() || !sheetCfg().live || gs.status === 'conflict' || gs.status === 'key') return paintSheet();
+    gs.timer = setTimeout(() => sendSheet(false), now ? 0 : 2500);
+    paintSheet();
+  }
+  function jsonp(url, params, ms) {
+    return new Promise((resolve, reject) => {
+      const cb = '__sgcb' + Date.now().toString(36) + Math.floor(Math.random() * 1e6);
+      const el = document.createElement('script');
+      const done = () => { clearTimeout(t); delete window[cb]; el.remove(); };
+      const t = setTimeout(() => { done(); reject(new Error('timeout')); }, ms || 20000);
+      window[cb] = (d) => { done(); resolve(d); };
+      el.onerror = () => { done(); reject(new Error('net')); };
+      el.src = url + (url.includes('?') ? '&' : '?') + new URLSearchParams(Object.assign({}, params, { callback: cb }));
+      document.head.appendChild(el);
+    });
+  }
+  async function sendSheet(force) {
+    gs.timer = null;
+    if (!sheetOn()) return paintSheet();
+    if (gs.busy) { gs.again = true; return; }
+    const c = sheetCfg(), snap = SG.sheetSnapshot(state);
+    const sig = c.url + '|' + c.tour + '|' + JSON.stringify(Object.assign({}, snap, { savedAt: 0 }));
+    if (!force && sig === gs.lastSig && gs.status === 'ok') return paintSheet();
+    const body = JSON.stringify({ key: c.key, tour: c.tour, force: !!force, snap });
+    gs.busy = true; gs.status = 'sending'; clearTimeout(gs.retry); paintSheet();
+    let res = null;
+    try {
+      try {
+        const r = await fetch(c.url, { method: 'POST', body, headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        res = await r.json();
+      } catch (e) {
+        if (navigator.onLine === false) throw e;
+        // ответ скрипта не прочитать (браузер не дал) — отправляем вслепую и сверяемся по статусу
+        await fetch(c.url, { method: 'POST', body, mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        const stt = await jsonp(c.url, { act: 'status', key: c.key });
+        const t = stt && stt.ok && stt.tours ? stt.tours[c.tour] : null;
+        if (!stt || !stt.ok) res = stt || { ok: false, error: 'unknown' };
+        else if (t && t.id === snap.id && t.savedAt >= snap.savedAt) res = { ok: true };
+        else if (t && t.id !== snap.id) res = { ok: false, error: 'conflict', other: t.name };
+        else res = { ok: false, error: 'unknown' };
+      }
+      if (res && res.ok) { gs.status = 'ok'; gs.at = new Date(); gs.lastSig = sig; gs.other = null; }
+      else if (res && res.error === 'key') gs.status = 'key';
+      else if (res && res.error === 'conflict') { gs.status = 'conflict'; gs.other = res.other || ''; render(); }
+      else { gs.status = 'error'; gs.retry = setTimeout(() => sendSheet(false), 15000); }
+    } catch (e) {
+      gs.status = navigator.onLine === false ? 'offline' : 'error';
+      gs.retry = setTimeout(() => sendSheet(false), 15000);
+    } finally {
+      gs.busy = false;
+      if (gs.again) { gs.again = false; scheduleSheet(true); }
+      paintSheet();
+    }
+  }
+  addEventListener('online', () => { if (gs.status === 'offline' || gs.status === 'error') sendSheet(false); });
+  function sheetHtml() {
+    if (!sheetReady() || state.example) return '';
+    const n = 'Таблица, тур ' + sheetCfg().tour;
+    if (!canEdit()) return '';
+    if (gs.status === 'sending' || gs.timer) return '<span class="dot"></span>' + n + ': отправляю…';
+    if (gs.status === 'ok') return '<span class="dot on"></span>' + n + ': обновлено ' + clock(gs.at);
+    if (gs.status === 'offline') return '<span class="dot warn"></span>' + n + ': нет сети, отправлю, когда появится';
+    if (gs.status === 'error') return '<span class="dot warn"></span>' + n + ': не отправилось, повторю · <button class="linkbtn" data-act="gs-send">Сейчас</button>';
+    if (gs.status === 'key') return '<span class="dot warn"></span>' + n + ': скрипт не принял ключ';
+    if (gs.status === 'conflict') return '<span class="dot warn"></span>' + n + ' занят другим турниром';
+    if (!sheetCfg().live) return '<span class="dot"></span>' + n + ': только по кнопке · <button class="linkbtn" data-act="gs-send">Отправить</button>';
+    return '<span class="dot"></span>' + n;
+  }
+  function paintSheet() {
+    const el = document.getElementById('sheetnote'); if (el) { el.innerHTML = sheetHtml(); el.hidden = !el.innerHTML; }
+    const st = document.getElementById('gsstate'); if (st) st.innerHTML = sheetHtml() || '<span class="dot"></span>Не настроено';
+  }
+  function sheetScript() {
+    const k = (sheetCfg().key || '').replace(/[\\']/g, '');
+    return k ? GAS_CODE.replace("const KEY = 'поменяй-меня';", "const KEY = '" + k + "';") : GAS_CODE;
+  }
+  function rememberSheet() { try { localStorage.setItem(LS_SHEET, JSON.stringify({ url: sheetCfg().url, key: sheetCfg().key })); } catch (e) {} }
+  function sheetPanel() {
+    const c = sheetCfg(), ed = canEdit() ? '' : 'disabled';
+    const chk = gs.check;
+    return `<section class="panel">
+      <h2>Google Таблица</h2>
+      <p class="muted">Бои, таблица тура и «Отбор» сами обновляются в таблице сезона через 2–3 секунды после любого изменения. Нужно один раз поставить в таблицу скрипт — <button class="linkbtn" data-act="gs-help" style="padding:0">${ui.gsHelp ? 'скрыть инструкцию' : 'как подключить'}</button>.</p>
+      ${ui.gsHelp ? `<ol class="muted" style="margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px">
+        <li>Введите ниже ключ — любое слово, или нажмите «Придумать».</li>
+        <li>Нажмите «Скопировать скрипт» — ключ уже будет внутри.</li>
+        <li>В Google Таблице: «Расширения → Apps Script». Удалите всё в файле Code.gs, вставьте скопированное, нажмите «Сохранить».</li>
+        <li>«Начать развертывание → Новое развертывание», тип «Веб-приложение». «Запуск от имени: я», «У кого есть доступ: все». «Начать развертывание», разрешите доступ (если Google предупредит — «Дополнительные настройки → Перейти к проекту»).</li>
+        <li>Скопируйте «URL веб-приложения» в поле «Ссылка» и нажмите «Проверить связь».</li>
+        <li>Если скрипт потом обновится: «Начать развертывание → Управление развертываниями → ✎ → Версия: новая → Начать развертывание». Ссылка останется прежней.</li>
+      </ol>` : ''}
+      <div class="field"><label for="gsurl">Ссылка (URL веб-приложения)</label><input type="text" id="gsurl" value="${esc(c.url)}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false" ${ed}></div>
+      <div class="row" style="align-items:flex-end">
+        <div class="field" style="flex:1 1 160px"><label for="gskey">Ключ</label><input type="text" id="gskey" value="${esc(c.key)}" autocomplete="off" spellcheck="false" ${ed}></div>
+        ${canEdit() ? '<button class="btn" data-act="gs-genkey">Придумать</button>' : ''}
+        <div class="field"><label for="gstour">Этот турнир — </label><select id="gstour" ${ed}><option value="0"${c.tour ? '' : ' selected'}>не заливать</option>${[1, 2, 3, 4].map((t) => `<option value="${t}"${c.tour === t ? ' selected' : ''}>тур ${t} сезона</option>`).join('')}</select></div>
+      </div>
+      <label class="radio"><input type="checkbox" id="gslive" ${c.live ? 'checked' : ''} ${ed}><span><b>Обновлять автоматически</b> — зрители видят баллы почти сразу. Без галочки — только по кнопке «Отправить сейчас».</span></label>
+      <p class="syncnote" id="gsstate">${sheetHtml() || '<span class="dot"></span>Не настроено'}</p>
+      ${chk ? `<p class="vnote ${chk.ok ? 'ok' : 'warn'}">${esc(chk.text)}</p>` : ''}
+      ${canEdit() ? `<div class="row"><button class="btn" data-act="gs-send" ${sheetReady() && !state.example ? '' : 'disabled'}>Отправить сейчас</button><button class="btn" data-act="gs-check" ${c.url && c.key ? '' : 'disabled'}>Проверить связь</button><button class="btn" data-act="gs-script">Скопировать скрипт</button></div>` : ''}
+      ${state.example ? '<p class="muted" style="font-size:13px">Пример турнира в таблицу не отправляется.</p>' : ''}
+      ${inArtifact ? '<p class="muted" style="font-size:13px">В этой версии на claude.ai браузер может не пустить запросы к Google. Заливка точно работает в офлайн-файле и установленном приложении.</p>' : ''}
+    </section>`;
+  }
+  async function checkSheet() {
+    const c = sheetCfg();
+    gs.check = { ok: true, text: 'Проверяю…' }; render();
+    try {
+      const r = await jsonp(c.url, { act: 'status', key: c.key });
+      if (!r || !r.ok) gs.check = { ok: false, text: r && r.error === 'key' ? 'Скрипт отвечает, но ключ не совпадает. Скопируйте скрипт заново и обновите развертывание или исправьте ключ.' : 'Скрипт ответил ошибкой.' };
+      else {
+        const t = c.tour && r.tours ? r.tours[c.tour] : null;
+        const busy = Object.keys(r.tours || {}).sort().map((k) => 'тур ' + k + ' — «' + r.tours[k].name + '»').join(', ');
+        gs.check = { ok: true, text: 'Связь есть: таблица «' + r.sheet + '». ' + (busy ? 'Уже залито: ' + busy + '.' : 'Туров пока нет.') + (t && t.id !== state.id ? ' Тур ' + c.tour + ' занят другим турниром — при отправке приложение спросит, перезаписать ли.' : '') };
+      }
+    } catch (e) {
+      gs.check = { ok: false, text: 'Не удалось связаться. Проверьте ссылку: она должна заканчиваться на /exec, а в развертывании должен быть доступ «все».' };
+    }
+    render();
+  }
+
   function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen, vview: ui.vview })); } catch (e) {} }
   function persistLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
   function save(immediate) {
@@ -417,6 +558,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     const json = JSON.stringify(state);
     try { localStorage.setItem(LS_KEY, json); } catch (e) {}
     scheduleWrite(immediate);
+    scheduleSheet();
     if (store.mode !== 'db' || !store.canWrite) return;
     store.dirty = true;
     clearTimeout(store.timer);
@@ -616,7 +758,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
           <span class="eyebrow">Своя игра · швейцарская система</span>
           <h1>${esc(state.name)}</h1>
         </div>
-        <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div class="syncnote" id="syncnote">${syncHtml()}</div></div>
+        <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div style="display:grid;gap:2px;justify-items:end"><div class="syncnote" id="syncnote">${syncHtml()}</div><div class="syncnote" id="sheetnote"${sheetHtml() ? '' : ' hidden'}>${sheetHtml()}</div></div></div>
       </header>
       <nav class="boardwrap" aria-label="Этапы турнира"><div class="board">${stageCells()}</div></nav>`;
     if (state.example) html += `<div class="banner"><p><b>Это пример турнира</b> на 31 участника: два тура сыграны, третий разыгран. Посмотрите, как всё устроено, затем начните свой турнир.</p>${canEdit() ? '<button class="btn primary" data-act="new-ask">Начать свой турнир</button>' : ''}</div>`;
@@ -628,6 +770,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       const p = ui.pending, played = p.tours.filter(SG.tourComplete).length;
       html += `<div class="banner warn"><p>Открыть турнир «${esc(p.name || 'без названия')}»: ${p.players.length} ${plural(p.players.length, 'участник', 'участника', 'участников')}, сыграно туров: ${played} из 4? Текущий турнир на этом устройстве будет заменён.</p><div class="row"><button class="btn primary" data-act="open-do">Открыть</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
     }
+    if (gs.status === 'conflict' && sheetOn()) html += `<div class="banner warn"><p>В Google Таблице тур ${sheetCfg().tour} уже занят турниром «${esc(gs.other)}». Перезаписать его этим турниром? Если тур выбран по ошибке, поменяйте номер на вкладке «Участники».</p><div class="row"><button class="btn primary" data-act="gs-force">Перезаписать тур ${sheetCfg().tour}</button><button class="btn" data-act="gs-pause">Не заливать</button></div></div>`;
     if (ui.copyText !== null) html += `<div class="panel copybox"><p>Браузер не дал скопировать автоматически. Выделите текст и скопируйте вручную:</p><textarea id="copyfallback" readonly>${esc(ui.copyText)}</textarea><div><button class="btn" data-act="copy-close">Закрыть</button></div></div>`;
 
     const v = ui.tab;
@@ -689,6 +832,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
             <span class="muted" style="font-size:13px">Если совпало всё: за выход в тройку — перестрелка (результат вводится вручную), с 4-го места — места и кубковые очки делятся.</span>
           </div>
         </section>
+        ${sheetPanel()}
         ${filesPanel()}
       </div>
     </div>`;
@@ -1101,6 +1245,11 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     else if (el.id === 'evenb') { state.settings.evenBattles = el.checked; save(); render(); }
     else if (el.id === 'vcount') { venCfg().count = Number(el.value) || 0; save(); render(); }
     else if (el.name === 'hscope') { state.settings.hostScope = el.value; save(); render(); }
+    else if (el.id === 'gsurl' || el.id === 'gskey') {
+      sheetCfg()[el.id === 'gsurl' ? 'url' : 'key'] = el.value.trim();
+      gs.status = 'idle'; gs.check = null; gs.lastSig = null; rememberSheet(); save(); render();
+    } else if (el.id === 'gstour') { sheetCfg().tour = Number(el.value) || 0; gs.status = 'idle'; gs.lastSig = null; save(); render(); }
+    else if (el.id === 'gslive') { sheetCfg().live = el.checked; save(); render(); }
     else if (el.id === 'h2hEach') { state.settings.h2hEach = el.checked; save(); render(); }
     else if (el.id === 'vper') { venCfg().perVenue = Number(el.value) || 1; save(); render(); }
     else if (el.dataset.vname !== undefined) { refreshVenueCheck(); }
@@ -1413,6 +1562,16 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     if (!a) return;
     const act = a.dataset.act;
     if (act === 'draw') return drawTour();
+    if (act === 'gs-send') { gs.status = gs.status === 'conflict' ? 'conflict' : 'idle'; return gs.status === 'conflict' ? render() : sendSheet(true); }
+    if (act === 'gs-force') { gs.status = 'idle'; render(); return sendSheet(true); }
+    if (act === 'gs-pause') { sheetCfg().tour = 0; gs.status = 'idle'; save(); return render(); }
+    if (act === 'gs-check') return checkSheet();
+    if (act === 'gs-help') { ui.gsHelp = !ui.gsHelp; return render(); }
+    if (act === 'gs-script') return copy(sheetScript(), sheetCfg().key ? 'Скрипт скопирован, ключ внутри' : 'Скрипт скопирован. Ключ впишите в первой строке после «const KEY =»');
+    if (act === 'gs-genkey') {
+      const abc = 'abcdefghjkmnpqrstuvwxyz23456789', a = new Uint32Array(14); crypto.getRandomValues(a);
+      sheetCfg().key = Array.from(a, (x) => abc[x % abc.length]).join(''); gs.status = 'idle'; gs.lastSig = null; rememberSheet(); save(); return render();
+    }
     if (act === 'cancel' || act === 'copy-close') { ui.confirm = null; ui.copyText = null; ui.pending = null; ui.pendingName = null; return render(); }
     if (act === 'save-file') return saveFile();
     if (act === 'open-do') {
@@ -1531,5 +1690,6 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   });
 
   render();
+  if (sheetOn() && sheetCfg().live) scheduleSheet(); // досылаем то, что могло не уйти до закрытия страницы
 })();
 </script>

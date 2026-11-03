@@ -874,9 +874,62 @@ const SG = (() => {
     return { rows: out, played: !!res, tieForFirst };
   }
 
+  /* Снимок турнира для Google Таблицы: всё уже посчитано, скрипт таблицы только рисует. */
+  function sheetSnapshot(state) {
+    const pl = Object.fromEntries(state.players.map((p) => [p.id, p]));
+    const nm = (id) => (id && pl[id] ? pl[id].name : null);
+    // стартовый номер — как в списке участников: по рейтингу, при равенстве — порядок списка
+    const seed = Object.fromEntries(state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).map((p, i) => [p.id, i + 1]));
+    const names = ((state.settings && state.settings.venues && state.settings.venues.names) || []).map((x) => String(x || '').trim());
+    const rounds = state.tours.map((t) => {
+      const M = t.battles.length, hasV = t.battles.some((b) => b.venue !== null && b.venue !== undefined);
+      const V = hasV ? 0 : Math.min(5, Math.ceil(M / 2)) || 1;
+      return {
+        battles: t.battles.map((b, bi) => {
+          const res = battleResult(b);
+          const venue = hasV ? b.venue : bi % V, slot = hasV ? b.slot || 1 : Math.floor(bi / V) + 1;
+          return {
+            n: bi + 1, venue, slot, venueName: hasV ? names[venue] || 'Площадка ' + (venue + 1) : '', host: nm(b.host),
+            players: b.players.map((id) => {
+              const s = b.scores[id];
+              return { seed: seed[id], name: nm(id), score: s === null || s === undefined || s === '' ? null : Number(s), pts: res ? res[id].pts : null };
+            }),
+          };
+        }),
+      };
+    });
+    const played = state.tours.filter(tourComplete).length;
+    const st = standings(state);
+    const fin = state.final;
+    const fs = fin ? finalStandings(state) : null;
+    const res = fs && fs.played && !fs.tieForFirst ? fs : null;
+    const byFs = res ? Object.fromEntries(res.rows.map((r) => [r.id, r])) : {};
+    const finIds = new Set(fin ? fin.players : []);
+    const table = (played ? st : st.slice().sort((a, b) => seed[a.id] - seed[b.id])).map((r) => ({
+      place: played ? r.place : null, rank: played ? r.rank : null, name: r.name,
+      rounds: [0, 1, 2, 3].map((t) => (r.perTour[t] ? { pts: r.perTour[t].pts, score: r.perTour[t].score, battle: r.perTour[t].battle } : null)),
+      pts: played ? r.pts : null, score: played ? r.score : null, opp: played ? Math.round(r.opp * 100) / 100 : null,
+      finalist: finIds.has(r.id), finalPlace: byFs[r.id] ? byFs[r.id].place : null, cup: byFs[r.id] ? byFs[r.id].cup : null,
+    }));
+    let final = null;
+    if (fin) {
+      const fr = battleResult(fin);
+      final = {
+        host: nm(fin.host),
+        players: fin.players.map((id) => ({ name: nm(id), score: fin.scores[id] === null || fin.scores[id] === undefined || fin.scores[id] === '' ? null : Number(fin.scores[id]), place: fr ? fr[id].place : null }))
+          .sort((a, b) => (fr ? b.score - a.score : 0)),
+      };
+    }
+    return {
+      v: 1, id: state.id || null, name: state.name || '', savedAt: state.savedAt || 0, played,
+      rounds, table, final,
+      result: res ? res.rows.map((r) => ({ name: r.name, place: r.place, cup: r.cup })) : null,
+    };
+  }
+
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { sheetSnapshot, SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 
 /* Минимальная запись .xlsx без библиотек: ZIP без сжатия + SpreadsheetML.
@@ -987,6 +1040,8 @@ const XLSX = (() => {
   const uid = () => 'p' + Math.random().toString(36).slice(2, 9);
   const LS_KEY = 'sg-swiss-state-v1';
   const LS_UI = 'sg-swiss-ui-v1';
+  const LS_SHEET = 'sg-swiss-sheet-v1'; // последняя ссылка и ключ Google Таблицы — подставляются в новые турниры
+  const GAS_CODE = "/**\n * «Своя игра: швейцарская жеребьёвка» → Google Таблица сезона.\n *\n * Приложение присылает готовый снимок тура (всё уже посчитано), скрипт рисует листы\n * «Тур N Бои», «Тур N Таблица» и пересчитывает «Отбор Таблица».\n * Другие листы таблицы скрипт не трогает.\n *\n * Установка: Расширения → Apps Script → вставить этот файл вместо содержимого Code.gs →\n * заменить ключ ниже → Развернуть → Новое развертывание → Веб-приложение,\n * «Запуск от имени: я», «Доступ: все» → скопировать ссылку в приложение.\n */\nconst KEY = 'поменяй-меня'; // секретное слово: то же самое вводится в приложении\n\nconst ORDER = ['Тур 1 Бои', 'Тур 1 Таблица', 'Тур 2 Бои', 'Тур 2 Таблица', 'Тур 3 Бои', 'Тур 3 Таблица', 'Тур 4 Бои', 'Тур 4 Таблица', 'Отбор Таблица'];\nconst TAB = { 1: '#ff0000', 2: '#4a86e8', 3: '#ff9900', 4: '#9900ff', 0: '#980000' };\nconst YEL = '#f7cb4d', CREAM = '#fef8e3', GREEN = '#d9ead3', MUTED = '#666666';\n// цвет боя в таблице тура: участники одного боя в одном круге — одного цвета\nconst BATTLE = ['#f4b4b4', '#a8d8f0', '#f7e39a', '#c9b8ee', '#b5e3b0', '#f6c29c', '#9ee0d6', '#f0b8dc', '#d9e3a0', '#d8c8b0', '#dadada', '#c4ccf4', '#fcdcc4', '#d4eec4', '#f2d4f0', '#c8ecec'];\nconst px = (w) => Math.round(w * 7 + 5); // ширина как в Excel → пиксели\n\n/* ---------- приём ---------- */\nfunction doPost(e) {\n  let req;\n  try { req = JSON.parse(e.postData.contents); } catch (err) { return out_({ ok: false, error: 'bad-json' }); }\n  return out_(handle_(req));\n}\n\nfunction doGet(e) {\n  const p = (e && e.parameter) || {};\n  if (!p.act) return ContentService.createTextOutput('Скрипт заливки «Своей игры» работает. Ссылку вставьте в приложение.');\n  let res;\n  if (p.key !== KEY) res = { ok: false, error: 'key' };\n  else if (p.act === 'status') res = status_();\n  else res = { ok: false, error: 'act' };\n  return out_(res, p.callback);\n}\n\nfunction out_(obj, callback) {\n  const json = JSON.stringify(obj);\n  if (callback && /^[A-Za-z_$][\\w$]*$/.test(callback)) {\n    return ContentService.createTextOutput(callback + '(' + json + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);\n  }\n  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction status_() {\n  const reg = registry_(), tours = {};\n  for (let t = 1; t <= 4; t++) if (reg[t]) tours[t] = { id: reg[t].id, name: reg[t].name, savedAt: reg[t].savedAt };\n  return { ok: true, sheet: SpreadsheetApp.getActiveSpreadsheet().getName(), tours };\n}\n\nfunction handle_(req) {\n  if (!req || req.key !== KEY) return { ok: false, error: 'key' };\n  const tour = Number(req.tour), snap = req.snap;\n  if (!(tour >= 1 && tour <= 4) || !snap || !Array.isArray(snap.rounds)) return { ok: false, error: 'data' };\n  const lock = LockService.getScriptLock();\n  if (!lock.tryLock(30000)) return { ok: false, error: 'busy' };\n  try {\n    const reg = registry_(), cur = reg[tour];\n    if (cur && cur.id && snap.id && cur.id !== snap.id && !req.force) return { ok: false, error: 'conflict', tour, other: cur.name };\n    if (cur && cur.id === snap.id && (cur.savedAt || 0) > (snap.savedAt || 0)) return { ok: true, stale: true, tour, savedAt: cur.savedAt };\n    const ss = SpreadsheetApp.getActiveSpreadsheet();\n    drawBattles_(sheet_(ss, 'Тур ' + tour + ' Бои', TAB[tour]), snap);\n    drawTable_(sheet_(ss, 'Тур ' + tour + ' Таблица', TAB[tour]), snap);\n    reg[tour] = { id: snap.id, name: snap.name, savedAt: snap.savedAt, result: snap.result || null };\n    PropertiesService.getScriptProperties().setProperty('tour' + tour, JSON.stringify(reg[tour]));\n    drawSeason_(sheet_(ss, 'Отбор Таблица', TAB[0]), reg);\n    SpreadsheetApp.flush();\n    return { ok: true, tour, savedAt: snap.savedAt };\n  } finally {\n    lock.releaseLock();\n  }\n}\n\nfunction registry_() {\n  const props = PropertiesService.getScriptProperties(), reg = {};\n  for (let t = 1; t <= 4; t++) {\n    const raw = props.getProperty('tour' + t);\n    if (raw) try { reg[t] = JSON.parse(raw); } catch (e) {}\n  }\n  return reg;\n}\n\n/* Убрать тур из «Отбора» и снять привязку к турниру (запускается вручную из редактора). */\nfunction resetTour1() { reset_(1); }\nfunction resetTour2() { reset_(2); }\nfunction resetTour3() { reset_(3); }\nfunction resetTour4() { reset_(4); }\nfunction reset_(t) {\n  PropertiesService.getScriptProperties().deleteProperty('tour' + t);\n  const ss = SpreadsheetApp.getActiveSpreadsheet();\n  drawSeason_(sheet_(ss, 'Отбор Таблица', TAB[0]), registry_());\n}\n\n/* ---------- листы ---------- */\nfunction sheet_(ss, name, color) {\n  let sh = ss.getSheetByName(name);\n  if (!sh) {\n    const i = ORDER.indexOf(name);\n    let at = 0;\n    ss.getSheets().forEach((s, k) => { const j = ORDER.indexOf(s.getName()); if (j >= 0 && j < i) at = k + 1; });\n    sh = ss.insertSheet(name, at);\n  }\n  sh.setTabColor(color);\n  return sh;\n}\n\n/* Сетка ячеек: put(r, c, значение, {bg, b, al, color, size}); затем paint_ пишет всё разом. */\nfunction grid_() {\n  const g = { cells: {}, R: 0, C: 0, merges: [], borders: [], formats: [] };\n  g.put = (r, c, v, o) => {\n    g.cells[r + ':' + c] = Object.assign({ v: v === null || v === undefined ? '' : v }, o || {});\n    if (r > g.R) g.R = r; if (c > g.C) g.C = c;\n  };\n  g.box = (r, c, nr, nc, style) => g.borders.push([r, c, nr, nc, style || 'all']);\n  g.merge = (r, c, nr, nc) => g.merges.push([r, c, nr, nc]);\n  g.format = (r, c, nr, nc, f) => g.formats.push([r, c, nr, nc, f]);\n  return g;\n}\n\nfunction paint_(sh, g, widths, heights, frozen) {\n  const R = Math.max(g.R, 1), C = Math.max(g.C, 1);\n  sh.clear();\n  sh.clearConditionalFormatRules();\n  sh.setFrozenRows(0); sh.setFrozenColumns(0);\n  if (sh.getMaxRows() < R) sh.insertRowsAfter(sh.getMaxRows(), R - sh.getMaxRows());\n  if (sh.getMaxColumns() < C) sh.insertColumnsAfter(sh.getMaxColumns(), C - sh.getMaxColumns());\n  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart();\n  const V = [], BG = [], FW = [], AL = [], FC = [], FS = [];\n  for (let r = 1; r <= R; r++) {\n    const v = [], bg = [], fw = [], al = [], fc = [], fs = [];\n    for (let c = 1; c <= C; c++) {\n      const x = g.cells[r + ':' + c] || { v: '' };\n      v.push(x.v); bg.push(x.bg || null); fw.push(x.b ? 'bold' : 'normal'); al.push(x.al || 'center'); fc.push(x.color || '#000000'); fs.push(x.size || 10);\n    }\n    V.push(v); BG.push(bg); FW.push(fw); AL.push(al); FC.push(fc); FS.push(fs);\n  }\n  const all = sh.getRange(1, 1, R, C);\n  g.formats.forEach(([r, c, nr, nc, f]) => sh.getRange(r, c, nr, nc).setNumberFormat(f));\n  all.setValues(V).setBackgrounds(BG).setFontWeights(FW).setHorizontalAlignments(AL).setFontColors(FC).setFontSizes(FS)\n    .setFontFamily('Arial').setVerticalAlignment('middle');\n  g.merges.forEach(([r, c, nr, nc]) => sh.getRange(r, c, nr, nc).merge());\n  const S = SpreadsheetApp.BorderStyle;\n  g.borders.forEach(([r, c, nr, nc, st]) => {\n    const rg = sh.getRange(r, c, nr, nc);\n    if (st === 'bottom') rg.setBorder(null, null, true, null, null, null, '#000000', S.SOLID_MEDIUM);\n    else rg.setBorder(true, true, true, true, true, true, '#000000', S.SOLID);\n  });\n  Object.keys(widths).forEach((c) => sh.setColumnWidth(Number(c), px(widths[c])));\n  Object.keys(heights || {}).forEach((r) => sh.setRowHeight(Number(r), heights[r]));\n  if (frozen) { sh.setFrozenRows(frozen[0]); sh.setFrozenColumns(frozen[1]); }\n}\n\nconst surname_ = (n) => (n ? String(n).split(' ')[0] : '');\nconst num_ = (p) => (p !== null && p !== undefined && /^\\d+$/.test(String(p)) ? Number(p) : p);\nconst f2_ = (x) => (Math.round(x * 100) / 100).toFixed(2);\n\n/* «Тур N Бои»: круги друг под другом, волны внутри круга, площадки слева направо. */\nfunction drawBattles_(sh, snap) {\n  const g = grid_(), SIZE = 4;\n  let V = 1;\n  snap.rounds.forEach((rd) => rd.battles.forEach((b) => { if (b.venue + 1 > V) V = b.venue + 1; }));\n  const widths = { 1: 7.2, 2: 3.9 };\n  for (let v = 0; v < V; v++) { const c0 = 3 + 5 * v; widths[c0] = 5.5; widths[c0 + 1] = 29; widths[c0 + 2] = 7.2; widths[c0 + 3] = 7.2; widths[c0 + 4] = 3.9; }\n  let r0 = 2;\n  snap.rounds.forEach((rd, k) => {\n    const W = Math.max(1, ...rd.battles.map((b) => b.slot || 1));\n    const span = W * (SIZE + 2) - 1;\n    for (let r = r0; r < r0 + span; r++) g.put(r, 1, r === r0 ? 'Круг ' + (k + 1) : '', { bg: YEL });\n    g.merge(r0, 1, span, 1); g.box(r0, 1, span, 1);\n    const vname = {};\n    rd.battles.forEach((b) => { if (b.venueName) vname[b.venue] = b.venueName; });\n    for (let w = 1; w <= W; w++) {\n      const hr = r0 + (w - 1) * (SIZE + 2);\n      for (let v = 0; v < V; v++) {\n        const c0 = 3 + 5 * v, b = rd.battles.find((x) => x.venue === v && (x.slot || 1) === w);\n        let title = vname[v] || '';\n        if (b) title = b.n + '.' + (title ? ' ' + title : ' Бой') + (b.host ? ' (' + surname_(b.host) + ')' : '');\n        g.put(hr, c0, '№', { bg: CREAM }); g.put(hr, c0 + 1, title, { bg: CREAM }); g.put(hr, c0 + 2, 'Баллы', { bg: CREAM }); g.put(hr, c0 + 3, 'Очки', { bg: CREAM });\n        for (let i = 0; i < SIZE; i++) {\n          const p = b && b.players[i];\n          g.put(hr + 1 + i, c0, p ? p.seed : '', { bg: CREAM });\n          g.put(hr + 1 + i, c0 + 1, p ? p.name : '', { bg: CREAM, al: 'left' });\n          g.put(hr + 1 + i, c0 + 2, p && p.score !== null ? p.score : '', { bg: GREEN });\n          g.put(hr + 1 + i, c0 + 3, p && p.pts !== null ? p.pts : '', { bg: CREAM });\n        }\n        g.box(hr, c0, SIZE + 1, 4);\n        g.format(hr + 1, c0 + 3, SIZE, 1, '0.00');\n      }\n    }\n    r0 += span + 1;\n  });\n  paint_(sh, g, widths, { 1: 8 }, null);\n}\n\n/* «Тур N Таблица»: место, круги «очки / баллы» в цвете боя, итог тура, финал. */\nfunction drawTable_(sh, snap) {\n  const g = grid_();\n  const heads = ['Место', 'Участник', '1', '2', '3', '4', 'Очки', 'Баллы', 'Сила соп.', 'Финал', 'Итог. место', 'Кубк. очки'];\n  heads.forEach((h, i) => g.put(1, i + 1, h, { b: true }));\n  const n = snap.table.length;\n  snap.table.forEach((r, i) => {\n    const row = i + 2;\n    g.put(row, 1, num_(r.place)); g.put(row, 2, r.name, { al: 'left' });\n    for (let t = 0; t < 4; t++) {\n      const x = r.rounds[t];\n      g.put(row, 3 + t, x ? f2_(x.pts) + ' / ' + x.score : '', x ? { bg: BATTLE[(x.battle - 1) % BATTLE.length] } : null);\n    }\n    g.put(row, 7, r.pts); g.put(row, 8, r.score); g.put(row, 9, r.opp);\n    g.put(row, 10, r.finalist ? 'финал' : '', r.finalist ? { bg: GREEN } : null);\n    g.put(row, 11, num_(r.finalPlace)); g.put(row, 12, r.cup);\n  });\n  if (n) {\n    g.box(1, 1, n + 1, heads.length);\n    g.format(2, 7, n, 1, '0.00'); g.format(2, 9, n, 1, '0.00');\n    if (snap.played && n > 3) g.box(4, 1, 1, heads.length, 'bottom');\n  }\n  if (snap.final) {\n    const fr = n + 3;\n    g.put(fr, 2, 'Финал тура', { b: true, bg: YEL }); g.put(fr, 3, 'Баллы', { b: true, bg: YEL }); g.put(fr, 4, 'Место', { b: true, bg: YEL });\n    snap.final.players.forEach((f, i) => {\n      g.put(fr + 1 + i, 2, f.name, { al: 'left' }); g.put(fr + 1 + i, 3, f.score === null ? '' : f.score, { bg: GREEN }); g.put(fr + 1 + i, 4, num_(f.place));\n    });\n    g.box(fr, 2, snap.final.players.length + 1, 3);\n    if (snap.final.host) g.put(fr + 1 + snap.final.players.length, 2, 'Ведущий: ' + snap.final.host, { al: 'left', color: MUTED, size: 9 });\n  }\n  const widths = { 1: 7, 2: 22, 3: 11, 4: 11, 5: 11, 6: 11, 7: 7, 8: 7, 9: 8.5, 10: 7, 11: 8.5, 12: 8.5 };\n  paint_(sh, g, widths, { 1: 34 }, [1, 2]);\n  sh.getRange(1, 1, 1, heads.length).setWrap(true);\n}\n\n/* «Отбор Таблица»: сумма кубковых очков без худшего результата. */\nfunction seasonRows_(reg) {\n  const key = (s) => String(s).toLowerCase().replace(/ё/g, 'е').replace(/\\s+/g, ' ').trim();\n  const people = {};\n  for (let t = 1; t <= 4; t++) {\n    const res = reg[t] && reg[t].result;\n    (res || []).forEach((r) => {\n      const k = key(r.name);\n      people[k] = people[k] || { name: r.name, res: {} };\n      people[k].name = r.name;\n      people[k].res[t] = { place: r.place, cup: r.cup };\n    });\n  }\n  const rows = Object.keys(people).map((k) => {\n    const p = people[k];\n    const vals = [1, 2, 3, 4].map((t) => (p.res[t] ? p.res[t].cup : 0)).map((v) => (v === null || v === undefined || v === '?' ? 0 : v));\n    const fc = vals.filter((v) => v === 'Ф').length;\n    const nums = vals.filter((v) => v !== 'Ф').map(Number);\n    const tot = Math.round((nums.reduce((a, b) => a + b, 0) - (nums.length ? Math.min(...nums) : 0)) * 100) / 100;\n    const played = Object.keys(p.res).map((t) => p.res[t].cup).filter((v) => v !== null && v !== undefined && v !== '?');\n    const best = fc ? 'Ф' : played.length ? Math.max(...played.map(Number)) : 0;\n    return { name: p.name, res: p.res, fc, tot, best };\n  });\n  const bestN = (b) => (b === 'Ф' ? 1e9 : b);\n  rows.sort((a, b) => b.fc - a.fc || b.tot - a.tot || bestN(b.best) - bestN(a.best) || a.name.localeCompare(b.name, 'ru'));\n  for (let i = 0; i < rows.length;) {\n    let j = i;\n    while (j + 1 < rows.length && rows[j + 1].fc === rows[i].fc && rows[j + 1].tot === rows[i].tot && bestN(rows[j + 1].best) === bestN(rows[i].best)) j++;\n    for (let k = i; k <= j; k++) rows[k].place = i === j ? i + 1 : i + 1 + '–' + (j + 1);\n    i = j + 1;\n  }\n  return rows;\n}\n\nfunction drawSeason_(sh, reg) {\n  const g = grid_();\n  for (let c = 1; c <= 12; c++) { g.put(1, c, '', { bg: YEL }); g.put(2, c, '', { bg: YEL }); }\n  g.put(1, 1, 'Место', { bg: YEL }); g.put(1, 2, 'Участник', { bg: YEL }); g.put(1, 11, 'Сумма без худшего', { bg: YEL }); g.put(1, 12, 'Лучший результат', { bg: YEL });\n  for (let t = 0; t < 4; t++) { g.put(1, 3 + 2 * t, 'Тур ' + (t + 1), { bg: YEL }); g.put(2, 3 + 2 * t, 'Место', { bg: YEL }); g.put(2, 4 + 2 * t, 'Очки', { bg: YEL }); g.merge(1, 3 + 2 * t, 1, 2); }\n  [1, 2, 11, 12].forEach((c) => g.merge(1, c, 2, 1));\n  const rows = seasonRows_(reg);\n  rows.forEach((r, i) => {\n    const row = i + 3, bg = i % 2 === 0 ? CREAM : null;\n    g.put(row, 1, r.place, { bg }); g.put(row, 2, r.name, { bg, al: 'left' });\n    for (let t = 0; t < 4; t++) {\n      const x = r.res[t + 1];\n      g.put(row, 3 + 2 * t, x ? num_(x.place) : '', { bg }); g.put(row, 4 + 2 * t, x && x.cup !== null ? x.cup : '', { bg });\n    }\n    g.put(row, 11, r.tot, { bg }); g.put(row, 12, r.best, { bg });\n  });\n  g.box(1, 1, rows.length + 2, 12);\n  const widths = { 1: 7, 2: 22, 11: 10.5, 12: 10.5 };\n  for (let c = 3; c <= 10; c++) widths[c] = 7;\n  paint_(sh, g, widths, { 1: 30 }, [2, 2]);\n  sh.getRange(1, 1, 2, 12).setWrap(true);\n}\n";
 
   /* ---------- состояние ---------- */
   const newId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -1000,8 +1055,17 @@ const XLSX = (() => {
     if (s.settings.h2hEach === undefined) s.settings.h2hEach = true;
     if (!s.settings.hostScope) s.settings.hostScope = 'venue';
     if (!s.shootouts || typeof s.shootouts !== 'object') s.shootouts = {};
+    let lastSheet = {};
+    try { lastSheet = JSON.parse(localStorage.getItem(LS_SHEET) || '{}') || {}; } catch (e) {}
+    s.settings.sheet = Object.assign({ url: lastSheet.url || '', key: lastSheet.key || '', tour: guessTour(s.name), live: true }, s.settings.sheet || {});
     s.final = s.final || null;
     return s;
+  }
+  /* Номер отборочного тура сезона из названия: «1 Отборочный тур…», «Тур 2…» */
+  function guessTour(name) {
+    const n = String(name || '');
+    const m = n.match(/(?:^|\D)([1-4])\s*(?:-?(?:й|ый|ой))?\s*отбороч/i) || n.match(/отбороч\S*\s+тур\D{0,3}([1-4])(?!\d)/i) || n.match(/(?:^|\s)тур\s*([1-4])(?!\d)/i);
+    return m ? Number(m[1]) : 0;
   }
   const emptyState = () => normalize({ v: 1, id: newId(), savedAt: Date.now(), name: 'Своя игра', example: false, players: [], tours: [], final: null });
 
@@ -1179,6 +1243,136 @@ const XLSX = (() => {
   })();
   addEventListener('pagehide', () => { if (fsync.timer) writeNow(); });
 
+
+  /* ---------- заливка в Google Таблицу (скрипт gas/Code.gs в таблице сезона) ---------- */
+  const gs = { status: 'idle', at: null, timer: null, retry: null, busy: false, again: false, lastSig: null, other: null, check: null };
+  const sheetCfg = () => state.settings.sheet;
+  const sheetReady = () => { const c = sheetCfg(); return !!(c && /^https:\/\/script\.google(usercontent)?\.com\//.test(c.url) && c.key && c.tour >= 1 && c.tour <= 4); };
+  const sheetOn = () => sheetReady() && !state.example && canEdit();
+  function scheduleSheet(now) {
+    clearTimeout(gs.timer); gs.timer = null;
+    if (!sheetOn() || !sheetCfg().live || gs.status === 'conflict' || gs.status === 'key') return paintSheet();
+    gs.timer = setTimeout(() => sendSheet(false), now ? 0 : 2500);
+    paintSheet();
+  }
+  function jsonp(url, params, ms) {
+    return new Promise((resolve, reject) => {
+      const cb = '__sgcb' + Date.now().toString(36) + Math.floor(Math.random() * 1e6);
+      const el = document.createElement('script');
+      const done = () => { clearTimeout(t); delete window[cb]; el.remove(); };
+      const t = setTimeout(() => { done(); reject(new Error('timeout')); }, ms || 20000);
+      window[cb] = (d) => { done(); resolve(d); };
+      el.onerror = () => { done(); reject(new Error('net')); };
+      el.src = url + (url.includes('?') ? '&' : '?') + new URLSearchParams(Object.assign({}, params, { callback: cb }));
+      document.head.appendChild(el);
+    });
+  }
+  async function sendSheet(force) {
+    gs.timer = null;
+    if (!sheetOn()) return paintSheet();
+    if (gs.busy) { gs.again = true; return; }
+    const c = sheetCfg(), snap = SG.sheetSnapshot(state);
+    const sig = c.url + '|' + c.tour + '|' + JSON.stringify(Object.assign({}, snap, { savedAt: 0 }));
+    if (!force && sig === gs.lastSig && gs.status === 'ok') return paintSheet();
+    const body = JSON.stringify({ key: c.key, tour: c.tour, force: !!force, snap });
+    gs.busy = true; gs.status = 'sending'; clearTimeout(gs.retry); paintSheet();
+    let res = null;
+    try {
+      try {
+        const r = await fetch(c.url, { method: 'POST', body, headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        res = await r.json();
+      } catch (e) {
+        if (navigator.onLine === false) throw e;
+        // ответ скрипта не прочитать (браузер не дал) — отправляем вслепую и сверяемся по статусу
+        await fetch(c.url, { method: 'POST', body, mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' } });
+        const stt = await jsonp(c.url, { act: 'status', key: c.key });
+        const t = stt && stt.ok && stt.tours ? stt.tours[c.tour] : null;
+        if (!stt || !stt.ok) res = stt || { ok: false, error: 'unknown' };
+        else if (t && t.id === snap.id && t.savedAt >= snap.savedAt) res = { ok: true };
+        else if (t && t.id !== snap.id) res = { ok: false, error: 'conflict', other: t.name };
+        else res = { ok: false, error: 'unknown' };
+      }
+      if (res && res.ok) { gs.status = 'ok'; gs.at = new Date(); gs.lastSig = sig; gs.other = null; }
+      else if (res && res.error === 'key') gs.status = 'key';
+      else if (res && res.error === 'conflict') { gs.status = 'conflict'; gs.other = res.other || ''; render(); }
+      else { gs.status = 'error'; gs.retry = setTimeout(() => sendSheet(false), 15000); }
+    } catch (e) {
+      gs.status = navigator.onLine === false ? 'offline' : 'error';
+      gs.retry = setTimeout(() => sendSheet(false), 15000);
+    } finally {
+      gs.busy = false;
+      if (gs.again) { gs.again = false; scheduleSheet(true); }
+      paintSheet();
+    }
+  }
+  addEventListener('online', () => { if (gs.status === 'offline' || gs.status === 'error') sendSheet(false); });
+  function sheetHtml() {
+    if (!sheetReady() || state.example) return '';
+    const n = 'Таблица, тур ' + sheetCfg().tour;
+    if (!canEdit()) return '';
+    if (gs.status === 'sending' || gs.timer) return '<span class="dot"></span>' + n + ': отправляю…';
+    if (gs.status === 'ok') return '<span class="dot on"></span>' + n + ': обновлено ' + clock(gs.at);
+    if (gs.status === 'offline') return '<span class="dot warn"></span>' + n + ': нет сети, отправлю, когда появится';
+    if (gs.status === 'error') return '<span class="dot warn"></span>' + n + ': не отправилось, повторю · <button class="linkbtn" data-act="gs-send">Сейчас</button>';
+    if (gs.status === 'key') return '<span class="dot warn"></span>' + n + ': скрипт не принял ключ';
+    if (gs.status === 'conflict') return '<span class="dot warn"></span>' + n + ' занят другим турниром';
+    if (!sheetCfg().live) return '<span class="dot"></span>' + n + ': только по кнопке · <button class="linkbtn" data-act="gs-send">Отправить</button>';
+    return '<span class="dot"></span>' + n;
+  }
+  function paintSheet() {
+    const el = document.getElementById('sheetnote'); if (el) { el.innerHTML = sheetHtml(); el.hidden = !el.innerHTML; }
+    const st = document.getElementById('gsstate'); if (st) st.innerHTML = sheetHtml() || '<span class="dot"></span>Не настроено';
+  }
+  function sheetScript() {
+    const k = (sheetCfg().key || '').replace(/[\\']/g, '');
+    return k ? GAS_CODE.replace("const KEY = 'поменяй-меня';", "const KEY = '" + k + "';") : GAS_CODE;
+  }
+  function rememberSheet() { try { localStorage.setItem(LS_SHEET, JSON.stringify({ url: sheetCfg().url, key: sheetCfg().key })); } catch (e) {} }
+  function sheetPanel() {
+    const c = sheetCfg(), ed = canEdit() ? '' : 'disabled';
+    const chk = gs.check;
+    return `<section class="panel">
+      <h2>Google Таблица</h2>
+      <p class="muted">Бои, таблица тура и «Отбор» сами обновляются в таблице сезона через 2–3 секунды после любого изменения. Нужно один раз поставить в таблицу скрипт — <button class="linkbtn" data-act="gs-help" style="padding:0">${ui.gsHelp ? 'скрыть инструкцию' : 'как подключить'}</button>.</p>
+      ${ui.gsHelp ? `<ol class="muted" style="margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px">
+        <li>Введите ниже ключ — любое слово, или нажмите «Придумать».</li>
+        <li>Нажмите «Скопировать скрипт» — ключ уже будет внутри.</li>
+        <li>В Google Таблице: «Расширения → Apps Script». Удалите всё в файле Code.gs, вставьте скопированное, нажмите «Сохранить».</li>
+        <li>«Начать развертывание → Новое развертывание», тип «Веб-приложение». «Запуск от имени: я», «У кого есть доступ: все». «Начать развертывание», разрешите доступ (если Google предупредит — «Дополнительные настройки → Перейти к проекту»).</li>
+        <li>Скопируйте «URL веб-приложения» в поле «Ссылка» и нажмите «Проверить связь».</li>
+        <li>Если скрипт потом обновится: «Начать развертывание → Управление развертываниями → ✎ → Версия: новая → Начать развертывание». Ссылка останется прежней.</li>
+      </ol>` : ''}
+      <div class="field"><label for="gsurl">Ссылка (URL веб-приложения)</label><input type="text" id="gsurl" value="${esc(c.url)}" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false" ${ed}></div>
+      <div class="row" style="align-items:flex-end">
+        <div class="field" style="flex:1 1 160px"><label for="gskey">Ключ</label><input type="text" id="gskey" value="${esc(c.key)}" autocomplete="off" spellcheck="false" ${ed}></div>
+        ${canEdit() ? '<button class="btn" data-act="gs-genkey">Придумать</button>' : ''}
+        <div class="field"><label for="gstour">Этот турнир — </label><select id="gstour" ${ed}><option value="0"${c.tour ? '' : ' selected'}>не заливать</option>${[1, 2, 3, 4].map((t) => `<option value="${t}"${c.tour === t ? ' selected' : ''}>тур ${t} сезона</option>`).join('')}</select></div>
+      </div>
+      <label class="radio"><input type="checkbox" id="gslive" ${c.live ? 'checked' : ''} ${ed}><span><b>Обновлять автоматически</b> — зрители видят баллы почти сразу. Без галочки — только по кнопке «Отправить сейчас».</span></label>
+      <p class="syncnote" id="gsstate">${sheetHtml() || '<span class="dot"></span>Не настроено'}</p>
+      ${chk ? `<p class="vnote ${chk.ok ? 'ok' : 'warn'}">${esc(chk.text)}</p>` : ''}
+      ${canEdit() ? `<div class="row"><button class="btn" data-act="gs-send" ${sheetReady() && !state.example ? '' : 'disabled'}>Отправить сейчас</button><button class="btn" data-act="gs-check" ${c.url && c.key ? '' : 'disabled'}>Проверить связь</button><button class="btn" data-act="gs-script">Скопировать скрипт</button></div>` : ''}
+      ${state.example ? '<p class="muted" style="font-size:13px">Пример турнира в таблицу не отправляется.</p>' : ''}
+      ${inArtifact ? '<p class="muted" style="font-size:13px">В этой версии на claude.ai браузер может не пустить запросы к Google. Заливка точно работает в офлайн-файле и установленном приложении.</p>' : ''}
+    </section>`;
+  }
+  async function checkSheet() {
+    const c = sheetCfg();
+    gs.check = { ok: true, text: 'Проверяю…' }; render();
+    try {
+      const r = await jsonp(c.url, { act: 'status', key: c.key });
+      if (!r || !r.ok) gs.check = { ok: false, text: r && r.error === 'key' ? 'Скрипт отвечает, но ключ не совпадает. Скопируйте скрипт заново и обновите развертывание или исправьте ключ.' : 'Скрипт ответил ошибкой.' };
+      else {
+        const t = c.tour && r.tours ? r.tours[c.tour] : null;
+        const busy = Object.keys(r.tours || {}).sort().map((k) => 'тур ' + k + ' — «' + r.tours[k].name + '»').join(', ');
+        gs.check = { ok: true, text: 'Связь есть: таблица «' + r.sheet + '». ' + (busy ? 'Уже залито: ' + busy + '.' : 'Туров пока нет.') + (t && t.id !== state.id ? ' Тур ' + c.tour + ' занят другим турниром — при отправке приложение спросит, перезаписать ли.' : '') };
+      }
+    } catch (e) {
+      gs.check = { ok: false, text: 'Не удалось связаться. Проверьте ссылку: она должна заканчиваться на /exec, а в развертывании должен быть доступ «все».' };
+    }
+    render();
+  }
+
   function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen, vview: ui.vview })); } catch (e) {} }
   function persistLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
   function save(immediate) {
@@ -1187,6 +1381,7 @@ const XLSX = (() => {
     const json = JSON.stringify(state);
     try { localStorage.setItem(LS_KEY, json); } catch (e) {}
     scheduleWrite(immediate);
+    scheduleSheet();
     if (store.mode !== 'db' || !store.canWrite) return;
     store.dirty = true;
     clearTimeout(store.timer);
@@ -1386,7 +1581,7 @@ const XLSX = (() => {
           <span class="eyebrow">Своя игра · швейцарская система</span>
           <h1>${esc(state.name)}</h1>
         </div>
-        <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div class="syncnote" id="syncnote">${syncHtml()}</div></div>
+        <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div style="display:grid;gap:2px;justify-items:end"><div class="syncnote" id="syncnote">${syncHtml()}</div><div class="syncnote" id="sheetnote"${sheetHtml() ? '' : ' hidden'}>${sheetHtml()}</div></div></div>
       </header>
       <nav class="boardwrap" aria-label="Этапы турнира"><div class="board">${stageCells()}</div></nav>`;
     if (state.example) html += `<div class="banner"><p><b>Это пример турнира</b> на 31 участника: два тура сыграны, третий разыгран. Посмотрите, как всё устроено, затем начните свой турнир.</p>${canEdit() ? '<button class="btn primary" data-act="new-ask">Начать свой турнир</button>' : ''}</div>`;
@@ -1398,6 +1593,7 @@ const XLSX = (() => {
       const p = ui.pending, played = p.tours.filter(SG.tourComplete).length;
       html += `<div class="banner warn"><p>Открыть турнир «${esc(p.name || 'без названия')}»: ${p.players.length} ${plural(p.players.length, 'участник', 'участника', 'участников')}, сыграно туров: ${played} из 4? Текущий турнир на этом устройстве будет заменён.</p><div class="row"><button class="btn primary" data-act="open-do">Открыть</button><button class="btn" data-act="cancel">Отмена</button></div></div>`;
     }
+    if (gs.status === 'conflict' && sheetOn()) html += `<div class="banner warn"><p>В Google Таблице тур ${sheetCfg().tour} уже занят турниром «${esc(gs.other)}». Перезаписать его этим турниром? Если тур выбран по ошибке, поменяйте номер на вкладке «Участники».</p><div class="row"><button class="btn primary" data-act="gs-force">Перезаписать тур ${sheetCfg().tour}</button><button class="btn" data-act="gs-pause">Не заливать</button></div></div>`;
     if (ui.copyText !== null) html += `<div class="panel copybox"><p>Браузер не дал скопировать автоматически. Выделите текст и скопируйте вручную:</p><textarea id="copyfallback" readonly>${esc(ui.copyText)}</textarea><div><button class="btn" data-act="copy-close">Закрыть</button></div></div>`;
 
     const v = ui.tab;
@@ -1459,6 +1655,7 @@ const XLSX = (() => {
             <span class="muted" style="font-size:13px">Если совпало всё: за выход в тройку — перестрелка (результат вводится вручную), с 4-го места — места и кубковые очки делятся.</span>
           </div>
         </section>
+        ${sheetPanel()}
         ${filesPanel()}
       </div>
     </div>`;
@@ -1871,6 +2068,11 @@ const XLSX = (() => {
     else if (el.id === 'evenb') { state.settings.evenBattles = el.checked; save(); render(); }
     else if (el.id === 'vcount') { venCfg().count = Number(el.value) || 0; save(); render(); }
     else if (el.name === 'hscope') { state.settings.hostScope = el.value; save(); render(); }
+    else if (el.id === 'gsurl' || el.id === 'gskey') {
+      sheetCfg()[el.id === 'gsurl' ? 'url' : 'key'] = el.value.trim();
+      gs.status = 'idle'; gs.check = null; gs.lastSig = null; rememberSheet(); save(); render();
+    } else if (el.id === 'gstour') { sheetCfg().tour = Number(el.value) || 0; gs.status = 'idle'; gs.lastSig = null; save(); render(); }
+    else if (el.id === 'gslive') { sheetCfg().live = el.checked; save(); render(); }
     else if (el.id === 'h2hEach') { state.settings.h2hEach = el.checked; save(); render(); }
     else if (el.id === 'vper') { venCfg().perVenue = Number(el.value) || 1; save(); render(); }
     else if (el.dataset.vname !== undefined) { refreshVenueCheck(); }
@@ -2183,6 +2385,16 @@ const XLSX = (() => {
     if (!a) return;
     const act = a.dataset.act;
     if (act === 'draw') return drawTour();
+    if (act === 'gs-send') { gs.status = gs.status === 'conflict' ? 'conflict' : 'idle'; return gs.status === 'conflict' ? render() : sendSheet(true); }
+    if (act === 'gs-force') { gs.status = 'idle'; render(); return sendSheet(true); }
+    if (act === 'gs-pause') { sheetCfg().tour = 0; gs.status = 'idle'; save(); return render(); }
+    if (act === 'gs-check') return checkSheet();
+    if (act === 'gs-help') { ui.gsHelp = !ui.gsHelp; return render(); }
+    if (act === 'gs-script') return copy(sheetScript(), sheetCfg().key ? 'Скрипт скопирован, ключ внутри' : 'Скрипт скопирован. Ключ впишите в первой строке после «const KEY =»');
+    if (act === 'gs-genkey') {
+      const abc = 'abcdefghjkmnpqrstuvwxyz23456789', a = new Uint32Array(14); crypto.getRandomValues(a);
+      sheetCfg().key = Array.from(a, (x) => abc[x % abc.length]).join(''); gs.status = 'idle'; gs.lastSig = null; rememberSheet(); save(); return render();
+    }
     if (act === 'cancel' || act === 'copy-close') { ui.confirm = null; ui.copyText = null; ui.pending = null; ui.pendingName = null; return render(); }
     if (act === 'save-file') return saveFile();
     if (act === 'open-do') {
@@ -2301,6 +2513,7 @@ const XLSX = (() => {
   });
 
   render();
+  if (sheetOn() && sheetCfg().live) scheduleSheet(); // досылаем то, что могло не уйти до закрытия страницы
 })();
 </script>
 </body>

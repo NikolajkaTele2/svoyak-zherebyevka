@@ -520,8 +520,61 @@ const SG = (() => {
     return { rows: out, played: !!res, tieForFirst };
   }
 
+  /* Снимок турнира для Google Таблицы: всё уже посчитано, скрипт таблицы только рисует. */
+  function sheetSnapshot(state) {
+    const pl = Object.fromEntries(state.players.map((p) => [p.id, p]));
+    const nm = (id) => (id && pl[id] ? pl[id].name : null);
+    // стартовый номер — как в списке участников: по рейтингу, при равенстве — порядок списка
+    const seed = Object.fromEntries(state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0)).map((p, i) => [p.id, i + 1]));
+    const names = ((state.settings && state.settings.venues && state.settings.venues.names) || []).map((x) => String(x || '').trim());
+    const rounds = state.tours.map((t) => {
+      const M = t.battles.length, hasV = t.battles.some((b) => b.venue !== null && b.venue !== undefined);
+      const V = hasV ? 0 : Math.min(5, Math.ceil(M / 2)) || 1;
+      return {
+        battles: t.battles.map((b, bi) => {
+          const res = battleResult(b);
+          const venue = hasV ? b.venue : bi % V, slot = hasV ? b.slot || 1 : Math.floor(bi / V) + 1;
+          return {
+            n: bi + 1, venue, slot, venueName: hasV ? names[venue] || 'Площадка ' + (venue + 1) : '', host: nm(b.host),
+            players: b.players.map((id) => {
+              const s = b.scores[id];
+              return { seed: seed[id], name: nm(id), score: s === null || s === undefined || s === '' ? null : Number(s), pts: res ? res[id].pts : null };
+            }),
+          };
+        }),
+      };
+    });
+    const played = state.tours.filter(tourComplete).length;
+    const st = standings(state);
+    const fin = state.final;
+    const fs = fin ? finalStandings(state) : null;
+    const res = fs && fs.played && !fs.tieForFirst ? fs : null;
+    const byFs = res ? Object.fromEntries(res.rows.map((r) => [r.id, r])) : {};
+    const finIds = new Set(fin ? fin.players : []);
+    const table = (played ? st : st.slice().sort((a, b) => seed[a.id] - seed[b.id])).map((r) => ({
+      place: played ? r.place : null, rank: played ? r.rank : null, name: r.name,
+      rounds: [0, 1, 2, 3].map((t) => (r.perTour[t] ? { pts: r.perTour[t].pts, score: r.perTour[t].score, battle: r.perTour[t].battle } : null)),
+      pts: played ? r.pts : null, score: played ? r.score : null, opp: played ? Math.round(r.opp * 100) / 100 : null,
+      finalist: finIds.has(r.id), finalPlace: byFs[r.id] ? byFs[r.id].place : null, cup: byFs[r.id] ? byFs[r.id].cup : null,
+    }));
+    let final = null;
+    if (fin) {
+      const fr = battleResult(fin);
+      final = {
+        host: nm(fin.host),
+        players: fin.players.map((id) => ({ name: nm(id), score: fin.scores[id] === null || fin.scores[id] === undefined || fin.scores[id] === '' ? null : Number(fin.scores[id]), place: fr ? fr[id].place : null }))
+          .sort((a, b) => (fr ? b.score - a.score : 0)),
+      };
+    }
+    return {
+      v: 1, id: state.id || null, name: state.name || '', savedAt: state.savedAt || 0, played,
+      rounds, table, final,
+      result: res ? res.rows.map((r) => ({ name: r.name, place: r.place, cup: r.cup })) : null,
+    };
+  }
+
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { sheetSnapshot, SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 if (typeof module !== 'undefined') module.exports = SG;
