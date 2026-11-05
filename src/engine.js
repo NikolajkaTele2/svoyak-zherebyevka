@@ -475,14 +475,57 @@ const SG = (() => {
 
   /* Разложить тур по площадкам и назначить ведущих (ручные назначения сбрасываются). */
   function placeTour(tour, cfg, hostIds, blocked, scope) {
-    const plan = venuePlan(tour.battles.length, cfg);
+    const hostsMode = cfg && cfg.order === 'hosts';
+    const plan = venuePlan(tour.battles.length, hostsMode ? Object.assign({}, cfg, { order: 'waves' }) : cfg);
     tour.battles.forEach((b, i) => {
       b.venue = plan ? plan[i].venue : null;
       b.slot = plan ? plan[i].slot : null;
       b.host = null; b.hostManual = false;
     });
-    if (plan) assignHosts(tour.battles, hostIds, blocked, scope);
+    if (!plan) return tour;
+    if (hostsMode && hostIds && hostIds.length && tour.battles.length > 1) optimizePlacement(tour.battles, plan, hostIds, blocked, scope);
+    else assignHosts(tour.battles, hostIds, blocked, scope);
     return tour;
+  }
+
+  /* Раскладка «под ведущих»: состав боёв не меняется, меняется только площадка и волна каждого боя.
+     Цель по порядку: 1) больше боёв с ведущим; 2) меньше сумма мест ведущих в списке (вести достаётся тем, кто выше);
+     3) больше ведущих на своей площадке; 4) ближе к обычной раскладке по кругу.
+     Поиск: обмены боёв местами до улучшения, с нескольких стартов (детерминированно). */
+  function optimizePlacement(battles, plan, hostIds, blocked, scope) {
+    const M = battles.length, rank = new Map(hostIds.map((id, i) => [id, i]));
+    const evalP = (perm) => {
+      const bs = battles.map((b, i) => ({ players: b.players, venue: plan[perm[i]].venue, slot: plan[perm[i]].slot, host: null, hostManual: false }));
+      assignHosts(bs, hostIds, blocked, scope);
+      const where = new Map(); bs.forEach((b) => b.players.forEach((p) => where.set(p, b)));
+      let hosted = 0, sum = 0, same = 0, disp = 0;
+      bs.forEach((b, i) => {
+        if (b.host) { hosted++; sum += rank.get(b.host); const own = where.get(b.host); if (own && own.venue === b.venue) same++; }
+        disp += Math.abs(perm[i] - i);
+      });
+      return { key: [-hosted, sum, -same, disp], bs };
+    };
+    const better = (a, b) => { for (let k = 0; k < 4; k++) if (a.key[k] !== b.key[k]) return a.key[k] < b.key[k]; return false; };
+    let seed = 7 + M;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const ident = Array.from({ length: M }, (_, i) => i);
+    const starts = [ident.slice()];
+    for (let r = 0, R = M <= 10 ? 8 : M <= 13 ? 4 : 2; r < R; r++) { const p = ident.slice(); for (let i = M - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; } starts.push(p); }
+    let best = null, bestPerm = null;
+    for (const start of starts) {
+      let cur = start, c = evalP(cur), improved = true;
+      while (improved) {
+        improved = false;
+        for (let i = 0; i < M; i++) for (let j = i + 1; j < M; j++) {
+          [cur[i], cur[j]] = [cur[j], cur[i]];
+          const cc = evalP(cur);
+          if (better(cc, c)) { c = cc; improved = true; } else [cur[i], cur[j]] = [cur[j], cur[i]];
+        }
+      }
+      if (!best || better(c, best)) { best = c; bestPerm = cur.slice(); }
+    }
+    battles.forEach((b, i) => { b.venue = best.bs[i].venue; b.slot = best.bs[i].slot; b.host = best.bs[i].host; b.hostManual = false; });
+    return bestPerm;
   }
 
   /* Ведущий финала: первый в списке ведущих, кто не играет в финале. */

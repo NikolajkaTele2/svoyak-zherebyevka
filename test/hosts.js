@@ -21,6 +21,27 @@ const p11 = SG.venuePlan(11, { count: 5, perVenue: 2, order: 'pairs' });
 assert(p11[10].venue === 0 && p11[10].slot === 3, '11-й бой — третьим на первой площадке');
 const p3 = SG.venuePlan(9, { count: 3, perVenue: 3, order: 'pairs' });
 assert(p3.map((p) => p.venue + '' + p.slot).join() === '01,02,03,11,12,13,21,22,23', 'по 3 боя на площадке');
+// 1в. Раскладка «под ведущих» не хуже «по кругу»: боёв с ведущим не меньше, при равенстве сумма мест в списке не больше
+let optBetter = 0, optCases = 0;
+for (let N = 25; N <= 40; N++) for (const scope of ['venue', 'all']) {
+  const pl = Array.from({ length: N }, (_, i) => ({ id: 'q' + i, name: 'Q' + i, rating: 1000 - i }));
+  const hl = pl.map((p) => p.id).filter((_, i) => i % 4 !== 1).sort((a, b) => ((a.length * 31 + a.charCodeAt(1) * 7) % 11) - ((b.length * 31 + b.charCodeAt(1) * 7) % 11));
+  const d = SG.drawNext({ settings: {}, players: pl, tours: [] });
+  const cfgW = { count: 5, perVenue: 2, order: 'waves' }, cfgH = { count: 5, perVenue: 2, order: 'hosts' };
+  const a = SG.placeTour({ battles: JSON.parse(JSON.stringify(d.battles)) }, cfgW, hl, new Set(), scope);
+  const b = SG.placeTour({ battles: JSON.parse(JSON.stringify(d.battles)) }, cfgH, hl, new Set(), scope);
+  const score = (t) => [t.battles.filter((x) => x.host).length, t.battles.reduce((s, x) => s + (x.host ? hl.indexOf(x.host) : 0), 0)];
+  const [ha, sa] = score(a), [hb, sb] = score(b);
+  assert(hb > ha || (hb === ha && sb <= sa), 'под ведущих хуже по кругу: N=' + N + ' ' + scope + ' ' + [ha, sa, hb, sb]);
+  // составы боёв не изменились, места на площадках не превышены
+  assert(JSON.stringify(b.battles.map((x) => x.players)) === JSON.stringify(d.battles.map((x) => x.players)), 'составы не меняются');
+  const occ = new Set(b.battles.map((x) => x.venue + ':' + x.slot));
+  assert(occ.size === b.battles.length, 'одно место — один бой');
+  b.battles.forEach((x, i) => { if (x.host) { const own = b.battles.find((o) => o.players.includes(x.host)); assert(own && own !== x && (scope === 'all' ? own.slot !== x.slot : own.venue === x.venue), 'ведущий свободен'); } });
+  optCases++; if (hb > ha || sb < sa) optBetter++;
+}
+assert(optBetter > 0, 'раскладка под ведущих хоть иногда лучше');
+
 // 2. Ведущие: бой 1 ведёт кто-то из боя 6 и наоборот, выбирается тот, кто выше в списке
 const mk = (n, size = 3) => Array.from({ length: n }, (_, i) => ({ players: Array.from({ length: size }, (_, j) => 'p' + (i * size + j)), scores: {} }));
 // при парах сильный бой ведёт игрок соседнего боя
@@ -107,4 +128,4 @@ SG.placeTour(tour, { count: 5, perVenue: 2 }, [], new Set(), 'all');
 const cands = SG.hostCandidates(tour.battles, 0, [], new Set(), 'all');
 assert(cands.length === 15 && cands.every((c) => tour.battles[c.battle].slot === 2), 'кандидаты для боя 1 — все из боёв 6–10');
 assert(cands[0].sameVenue, 'своя площадка первой при равном приоритете');
-console.log('OK: площадки и ведущие (из всех свободных: с ведущим ' + covAll + ' боёв против ' + covVenue + ' со своей площадки; ' + Math.round(same / hostedAll * 100) + '% ведут на своей площадке)');
+console.log('OK: площадки и ведущие (под ведущих лучше по кругу в ' + optBetter + ' из ' + optCases + '; из всех свободных: с ведущим ' + covAll + ' боёв против ' + covVenue + ' со своей площадки; ' + Math.round(same / hostedAll * 100) + '% ведут на своей площадке)');

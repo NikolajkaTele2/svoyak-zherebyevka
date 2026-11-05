@@ -823,14 +823,57 @@ const SG = (() => {
 
   /* Разложить тур по площадкам и назначить ведущих (ручные назначения сбрасываются). */
   function placeTour(tour, cfg, hostIds, blocked, scope) {
-    const plan = venuePlan(tour.battles.length, cfg);
+    const hostsMode = cfg && cfg.order === 'hosts';
+    const plan = venuePlan(tour.battles.length, hostsMode ? Object.assign({}, cfg, { order: 'waves' }) : cfg);
     tour.battles.forEach((b, i) => {
       b.venue = plan ? plan[i].venue : null;
       b.slot = plan ? plan[i].slot : null;
       b.host = null; b.hostManual = false;
     });
-    if (plan) assignHosts(tour.battles, hostIds, blocked, scope);
+    if (!plan) return tour;
+    if (hostsMode && hostIds && hostIds.length && tour.battles.length > 1) optimizePlacement(tour.battles, plan, hostIds, blocked, scope);
+    else assignHosts(tour.battles, hostIds, blocked, scope);
     return tour;
+  }
+
+  /* Раскладка «под ведущих»: состав боёв не меняется, меняется только площадка и волна каждого боя.
+     Цель по порядку: 1) больше боёв с ведущим; 2) меньше сумма мест ведущих в списке (вести достаётся тем, кто выше);
+     3) больше ведущих на своей площадке; 4) ближе к обычной раскладке по кругу.
+     Поиск: обмены боёв местами до улучшения, с нескольких стартов (детерминированно). */
+  function optimizePlacement(battles, plan, hostIds, blocked, scope) {
+    const M = battles.length, rank = new Map(hostIds.map((id, i) => [id, i]));
+    const evalP = (perm) => {
+      const bs = battles.map((b, i) => ({ players: b.players, venue: plan[perm[i]].venue, slot: plan[perm[i]].slot, host: null, hostManual: false }));
+      assignHosts(bs, hostIds, blocked, scope);
+      const where = new Map(); bs.forEach((b) => b.players.forEach((p) => where.set(p, b)));
+      let hosted = 0, sum = 0, same = 0, disp = 0;
+      bs.forEach((b, i) => {
+        if (b.host) { hosted++; sum += rank.get(b.host); const own = where.get(b.host); if (own && own.venue === b.venue) same++; }
+        disp += Math.abs(perm[i] - i);
+      });
+      return { key: [-hosted, sum, -same, disp], bs };
+    };
+    const better = (a, b) => { for (let k = 0; k < 4; k++) if (a.key[k] !== b.key[k]) return a.key[k] < b.key[k]; return false; };
+    let seed = 7 + M;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const ident = Array.from({ length: M }, (_, i) => i);
+    const starts = [ident.slice()];
+    for (let r = 0, R = M <= 10 ? 8 : M <= 13 ? 4 : 2; r < R; r++) { const p = ident.slice(); for (let i = M - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; } starts.push(p); }
+    let best = null, bestPerm = null;
+    for (const start of starts) {
+      let cur = start, c = evalP(cur), improved = true;
+      while (improved) {
+        improved = false;
+        for (let i = 0; i < M; i++) for (let j = i + 1; j < M; j++) {
+          [cur[i], cur[j]] = [cur[j], cur[i]];
+          const cc = evalP(cur);
+          if (better(cc, c)) { c = cc; improved = true; } else [cur[i], cur[j]] = [cur[j], cur[i]];
+        }
+      }
+      if (!best || better(c, best)) { best = c; bestPerm = cur.slice(); }
+    }
+    battles.forEach((b, i) => { b.venue = best.bs[i].venue; b.slot = best.bs[i].slot; b.host = best.bs[i].host; b.hostManual = false; });
+    return bestPerm;
   }
 
   /* Ведущий финала: первый в списке ведущих, кто не играет в финале. */
@@ -1051,9 +1094,9 @@ const XLSX = (() => {
   function normalize(s) {
     s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['score', 'buch'], h2hEach: true, hostScope: 'venue' }, s.settings || {});
     s.settings.venues = Object.assign({ count: 0, perVenue: 2, names: [] }, s.settings.venues || {});
-    // новые турниры: соседние по силе бои на одной площадке и отдых ведущего после каждого тура;
+    // новые турниры: раскладка боёв «под ведущих» и отдых ведущего после каждого тура;
     // в уже начатых турнирах остаётся прежнее правило
-    if (!s.settings.venues.order) s.settings.venues.order = s.tours && s.tours.length ? 'waves' : 'pairs';
+    if (!s.settings.venues.order || (s.settings.venues.order === 'pairs' && !(s.tours && s.tours.length))) s.settings.venues.order = s.tours && s.tours.length ? 'waves' : 'hosts';
     if (s.settings.hostRest !== 1 && s.settings.hostRest !== 2) s.settings.hostRest = s.tours && s.tours.length ? 2 : 1;
     if (!Array.isArray(s.settings.venues.names)) s.settings.venues.names = [];
     if (!Array.isArray(s.hosts)) s.hosts = [];
@@ -1094,7 +1137,7 @@ const XLSX = (() => {
       const f = first[i], l = last[(i * 7) % 31];
       st.players.push({ id: 'd' + i, name: (fem.has(f) ? l + 'а' : l) + ' ' + f, rating: 1000 + Math.round(r() * 900) });
     }
-    st.settings.venues = { count: 5, perVenue: 2, order: 'pairs', names: ['Альфа', 'Бета', 'Гамма', 'Дельта', 'Эпсилон'] };
+    st.settings.venues = { count: 5, perVenue: 2, order: 'hosts', names: ['Альфа', 'Бета', 'Гамма', 'Дельта', 'Эпсилон'] };
     st.settings.hostRest = 1;
     st.hosts = ['d3', 'd12', 'd7', 'd20', 'd1', 'd25', 'd16', 'd9', 'd28', 'd5', 'd14', 'd22'];
     for (let t = 0; t < 2; t++) {
@@ -1697,7 +1740,7 @@ const XLSX = (() => {
         SG.venuePlan(M, vc).forEach((p, i) => groups[p.venue].push(i + 1));
         body += `<div id="vcheck" style="display:grid;gap:8px"><p>Боёв в туре: <b class="num">${M}</b>. Мест: <span class="num">${c.V} × ${c.K} = ${c.slots}</span>.</p>
           ${notes.map(([k, t]) => `<p class="vnote ${k}">${t}</p>`).join('')}
-          <div class="vplan">${groups.map((g, i) => `<span><b>${esc(venueName(i))}</b> <span class="num">${g.length ? 'бои ' + g.join(', ') : '—'}</span></span>`).join('')}</div></div>`;
+          ${vc.order === 'hosts' && vc.perVenue > 1 ? '' : `<div class="vplan">${groups.map((g, i) => `<span><b>${esc(venueName(i))}</b> <span class="num">${g.length ? 'бои ' + g.join(', ') : '—'}</span></span>`).join('')}</div>`}</div>`;
       } else body += '<p class="muted">Добавьте участников, и здесь появится раскладка боёв по площадкам.</p>';
       if (state.tours.length) body += '<p class="muted" style="font-size:13px">Изменения применятся к следующей жеребьёвке. Чтобы разложить текущий тур заново, откройте его и нажмите «Разложить заново по площадкам».</p>';
     }
@@ -1708,8 +1751,9 @@ const XLSX = (() => {
         ${vc.count ? `<div class="field"><label for="vper">Боёв на площадке</label><select id="vper" ${ed}>${[1, 2, 3, 4].map((k) => `<option value="${k}"${vc.perVenue === k ? ' selected' : ''}>${k}</option>`).join('')}</select></div>` : ''}
       </div>
       ${vc.count && vc.perVenue > 1 ? `<div class="field"><span class="lab">Как раскладывать бои</span>
-        <label class="radio"><input type="radio" name="vorder" value="pairs" ${vc.order === 'pairs' ? 'checked' : ''} ${ed}><span><b>Соседние бои на одной площадке</b> — бои 1 и 2 на первой площадке, 3 и 4 на второй и так далее. В каждой волне есть и верхние, и нижние бои, и сильные бои ведут игроки соседнего по силе боя.</span></label>
-        <label class="radio"><input type="radio" name="vorder" value="waves" ${vc.order === 'waves' ? 'checked' : ''} ${ed}><span><b>Сначала верхние бои</b> — по кругу: при 5 площадках бои 1–5 в первой волне, 6–10 во второй. Верхние бои ведут игроки нижних.</span></label>
+        <label class="radio"><input type="radio" name="vorder" value="hosts" ${vc.order === 'hosts' ? 'checked' : ''} ${ed}><span><b>Под ведущих</b> — жеребьёвка та же, но бои расставляются по волнам и площадкам так, чтобы вели те, кто выше в списке ведущих: сначала — чтобы ведущий был у каждого боя, затем — наименьшая сумма мест ведущих в списке. Раскладка видна после жеребьёвки.</span></label>
+        <label class="radio"><input type="radio" name="vorder" value="waves" ${vc.order === 'waves' ? 'checked' : ''} ${ed}><span><b>По кругу</b> — при 5 площадках бои 1–5 в первой волне, 6–10 во второй: на первой площадке бои 1 и 6, на второй 2 и 7 и так далее.</span></label>
+        ${vc.order === 'pairs' ? `<label class="radio"><input type="radio" name="vorder" value="pairs" checked ${ed}><span><b>Соседние бои на одной площадке</b> — 1 и 2, 3 и 4…</span></label>` : ''}
       </div>` : ''}
       ${body}
     </section>`;
@@ -2018,8 +2062,8 @@ const XLSX = (() => {
       <section><h3>5. Почему повторов не бывает</h3>
       <p>Перед 4-м туром у участника не больше 9 бывших соперников, а всего в турнире 25–48 человек. Свободных соперников остаётся с запасом. Мы проверили алгоритм на 3600 смоделированных турнирах от 25 до 48 участников: повторных встреч не было ни разу. Если всё же возникнет повтор, приложение предупредит и подсветит бой.</p></section>
       <section><h3>6. Площадки и ведущие</h3>
-      <p>Оператор задаёт число площадок (1–10), сколько боёв проходит на одной площадке (1–4) и их названия. По умолчанию соседние по силе бои ставятся на одну площадку в разные волны: при 10 боях и 5 площадках на первой площадке бои 1 и 2, на второй — 3 и 4 и так далее. Так в каждой волне есть и верхние, и нижние бои, а сильные бои ведут игроки соседнего боя. Другой вариант — по кругу: на первой площадке бои 1 и 6, на второй — 2 и 7 (верхние бои в первой волне). Если мест меньше, чем боёв, приложение предупредит.</p>
-      <p>Ведущий боя — участник, который в этом бою отдыхает. По умолчанию — с той же площадки: бой 1 ведёт кто-то из боя 2, а бой 2 — кто-то из боя 1. Из подходящих выбирается тот, кто выше в списке ведущих. Один человек ведёт не больше одного боя за тур и после тура с ведением следующий тур отдыхает (можно выбрать прежнее правило: отдых после двух туров подряд). Финал считается следующим туром после тура 4. Сначала приложение старается, чтобы ведущий был у каждого боя. Ведущего можно заменить вручную в карточке боя. Ведущий финала — первый из списка, кто не играет в финале.</p></section>
+      <p>Оператор задаёт число площадок (1–10), сколько боёв проходит на одной площадке (1–4) и их названия. По умолчанию бои раскладываются «под ведущих»: состав боёв не меняется, но волна и площадка каждого боя подбираются так, чтобы ведущий был у каждого боя, а вели по возможности те, кто выше в списке ведущих. Другой вариант — по кругу: при 10 боях и 5 площадках на первой площадке бои 1 и 6, на второй — 2 и 7 и так далее. Если мест меньше, чем боёв, приложение предупредит.</p>
+      <p>Ведущий боя — участник, который в этом бою отдыхает. По умолчанию — с той же площадки: бой ведёт кто-то из другого боя этой площадки. Из подходящих выбирается тот, кто выше в списке ведущих. Один человек ведёт не больше одного боя за тур и после тура с ведением следующий тур отдыхает (можно выбрать прежнее правило: отдых после двух туров подряд). Финал считается следующим туром после тура 4. Сначала приложение старается, чтобы ведущий был у каждого боя. Ведущего можно заменить вручную в карточке боя. Ведущий финала — первый из списка, кто не играет в финале.</p></section>
       <section><h3>7. Равенство очков и финал</h3>
       <p>Игроки с равными очками расставляются по шагам. Перед каждым шагом проверяется личная встреча: если все, кто сейчас равен, играли друг с другом, решает их общий бой (+1 за каждого из группы, кого обошёл в общем бою, −1 — кому уступил). Если хоть одна пара не встречалась или личная встреча никого не развела — решает следующий показатель: сумма баллов, затем сила соперников (порядок меняется в настройках). Кто остался равным после показателя, для них снова проверяется личная встреча — в маленькой группе шанс, что все играли друг с другом, выше.</p>
       <p>Если совпало всё: при борьбе за выход в тройку — перестрелка, её итог оператор вводит вручную (те, кто не попал в тройку, делят оставшиеся места); с 4-го места и ниже — места делятся, кубковые очки за эти места суммируются и делятся поровну. В таблице столбец «Решено» показывает, чем игрок оказался выше следующего. В финал выходят три лучших участника таблицы после 4-го тура.</p></section>
@@ -2094,7 +2138,7 @@ const XLSX = (() => {
       gs.status = 'idle'; gs.check = null; gs.lastSig = null; rememberSheet(); save(); render();
     } else if (el.id === 'gstour') { sheetCfg().tour = Number(el.value) || 0; gs.status = 'idle'; gs.lastSig = null; save(); render(); }
     else if (el.id === 'gslive') { sheetCfg().live = el.checked; save(); render(); }
-    else if (el.name === 'vorder') { venCfg().order = el.value === 'waves' ? 'waves' : 'pairs'; save(); render(); }
+    else if (el.name === 'vorder') { venCfg().order = ['waves', 'pairs', 'hosts'].includes(el.value) ? el.value : 'hosts'; save(); render(); }
     else if (el.name === 'hrest') { state.settings.hostRest = el.value === '2' ? 2 : 1; save(); render(); }
     else if (el.id === 'h2hEach') { state.settings.h2hEach = el.checked; save(); render(); }
     else if (el.id === 'vper') { venCfg().perVenue = Number(el.value) || 1; save(); render(); }
