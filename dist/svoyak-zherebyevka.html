@@ -697,7 +697,8 @@ const SG = (() => {
   /* Кто может вести бой bi: участники других боёв той же площадки в этом туре. */
   /* Отдых ведущих. rest = 2: кто вёл в двух предыдущих турах подряд, в туре t не назначается;
      rest = 1: кто вёл в предыдущем туре, в туре t не назначается. */
-  function hostBlocked(tours, t, rest) {
+  function hostBlocked(tours, t, rest, maxRun, noAhead) {
+    if (rest === 'slots') return busyRule(tours, t, maxRun || 5, t < QUAL_TOURS - 1 && !noAhead);
     const hosted = (k) => new Set(k >= 0 && tours[k] ? tours[k].battles.map((b) => b.host).filter(Boolean) : []);
     const a = hosted(t - 1);
     if (rest === 1) return a;
@@ -705,17 +706,54 @@ const SG = (() => {
     return new Set([...a].filter((id) => b.has(id)));
   }
 
+  /* Правило занятости по слотам: у каждого тура столько слотов, сколько волн; в слоте человек занят,
+     если играет или ведёт. Ведущим не назначается тот, у кого получилось бы L занятых слотов подряд
+     (считая прошлые туры и свою игру в этом туре). Финал — следующий слот после тура 4. */
+  function busyRule(tours, t, L, ahead) {
+    const hist = new Map();
+    let len = 0;
+    const mark = (id, s) => { if (!hist.has(id)) hist.set(id, new Set()); hist.get(id).add(s); };
+    for (let k = 0; k < t && k < tours.length; k++) {
+      const bs = tours[k].battles;
+      const W = Math.max(1, ...bs.map((b) => b.slot || 1));
+      bs.forEach((b) => { const s = len + (b.slot || 1) - 1; b.players.forEach((p) => mark(p, s)); if (b.host) mark(b.host, s); });
+      len += W;
+    }
+    const tail = (id) => { const h = hist.get(id); let n = 0; while (h && h.has(len - 1 - n)) n++; return n; };
+    // ahead: свою игру в следующем туре человек может получить в первой волне — считаем её занятой,
+    // чтобы правило не нарушилось потом из-за жеребьёвки
+    const longest = (id, cur, W, look) => { let r = tail(id), best = r; for (let s = 1; s <= W; s++) { if (cur.has(s)) { r++; if (r > best) best = r; } else r = 0; } if (look && r > 0 && r + 1 > best) best = r + 1; return best; };
+    return {
+      L,
+      has: (id) => tail(id) + 1 >= L, // для финала
+      forBattles(bs) {
+        const W = Math.max(1, ...bs.map((b) => b.slot || 1));
+        const play = new Map(); bs.forEach((b) => b.players.forEach((p) => play.set(p, b.slot || 1)));
+        return { has: (id, slot) => slot !== undefined && slot !== null && longest(id, new Set([play.get(id), slot]), W, ahead) >= L };
+      },
+      // сколько человек уже с L подряд из-за своей игры и ведения в этом туре (для раскладки «под ведущих»)
+      violations(bs) {
+        const W = Math.max(1, ...bs.map((b) => b.slot || 1));
+        const cur = new Map();
+        bs.forEach((b) => { b.players.forEach((p) => { if (!cur.has(p)) cur.set(p, new Set()); cur.get(p).add(b.slot || 1); }); if (b.host) { if (!cur.has(b.host)) cur.set(b.host, new Set()); cur.get(b.host).add(b.slot || 1); } });
+        let n = 0; for (const [id, set] of cur) if (longest(id, set, W) >= L) n++;
+        return n;
+      },
+    };
+  }
+  const blockFor = (blocked, battles) => (blocked && blocked.forBattles ? blocked.forBattles(battles) : blocked || new Set());
+
   /* scope: 'venue' — отдыхающие на той же площадке; 'all' — все, кто не играет в эту волну (тот же номер боя на площадке). */
   const isFree = (o, b, scope) => (scope === 'all' ? o.slot !== b.slot : o.venue === b.venue);
   function hostCandidates(battles, bi, hostIds, blocked, scope) {
-    blocked = blocked || new Set();
+    const bl = blockFor(blocked, battles);
     const b = battles[bi];
     const rank = new Map((hostIds || []).map((id, i) => [id, i]));
     const out = [];
     if (!b || b.venue === null || b.venue === undefined) return out;
     battles.forEach((o, oi) => {
       if (oi === bi || o.venue === null || o.venue === undefined || !isFree(o, b, scope)) return;
-      o.players.forEach((id) => out.push({ id, battle: oi, venue: o.venue, sameVenue: o.venue === b.venue, rank: rank.has(id) ? rank.get(id) : null, blocked: blocked.has(id) }));
+      o.players.forEach((id) => out.push({ id, battle: oi, venue: o.venue, sameVenue: o.venue === b.venue, rank: rank.has(id) ? rank.get(id) : null, blocked: !!bl.has(id, b.slot) }));
     });
     return out.sort((a, c) => (a.blocked - c.blocked) || (a.rank === null ? 1e9 : a.rank) - (c.rank === null ? 1e9 : c.rank) || (c.sameVenue - a.sameVenue) || a.battle - c.battle);
   }
@@ -737,7 +775,7 @@ const SG = (() => {
     const free = idx.filter((i) => !matchB.has(i));
     const adj = (h) => {
       const own = battles[playsIn.get(h)];
-      return free.filter((i) => battles[i].slot !== own.slot).sort((x, y) => ((battles[y].venue === own.venue) - (battles[x].venue === own.venue)) || x - y);
+      return free.filter((i) => battles[i].slot !== own.slot && !blocked.has(h, battles[i].slot)).sort((x, y) => ((battles[y].venue === own.venue) - (battles[x].venue === own.venue)) || x - y);
     };
     const tryAssign = (h, seen) => {
       for (const i of adj(h)) {
@@ -751,7 +789,7 @@ const SG = (() => {
     const hosts = [...rank.keys()].filter((h) => playsIn.has(h) && !used.has(h) && !blocked.has(h)).sort((a, c) => rank.get(a) - rank.get(c));
     for (const h of hosts) tryAssign(h, new Set());
     // те же люди, но перестановкой между боями — побольше ведущих на своей площадке
-    const canHost = (h, i) => battles[playsIn.get(h)].slot !== battles[i].slot;
+    const canHost = (h, i) => battles[playsIn.get(h)].slot !== battles[i].slot && !blocked.has(h, battles[i].slot);
     const home = (h, i) => (battles[playsIn.get(h)].venue === battles[i].venue ? 1 : 0);
     for (let improved = true, guard = 0; improved && guard < 50; guard++) {
       improved = false;
@@ -777,7 +815,7 @@ const SG = (() => {
      сначала стараемся закрыть ведущими все бои, затем берём тех, кто выше в списке ведущих.
      Назначенные вручную (hostManual) сохраняются, если всё ещё допустимы. */
   function assignHosts(battles, hostIds, blocked, scope) {
-    blocked = blocked || new Set();
+    blocked = blockFor(blocked, battles);
     const rank = new Map((hostIds || []).map((id, i) => [id, i]));
     battles.forEach((b) => { if (b.venue === null || b.venue === undefined) { b.host = null; b.hostManual = false; } });
     if (scope === 'all') return assignHostsAll(battles, rank, blocked);
@@ -795,7 +833,7 @@ const SG = (() => {
       }
       const cands = free.map((i) => {
         const list = [];
-        for (const j of idxs) if (j !== i) for (const p of battles[j].players) if (rank.has(p) && !used.has(p) && !blocked.has(p)) list.push(p);
+        for (const j of idxs) if (j !== i) for (const p of battles[j].players) if (rank.has(p) && !used.has(p) && !blocked.has(p, battles[i].slot)) list.push(p);
         return list.sort((a, c) => rank.get(a) - rank.get(c)).slice(0, 8);
       });
       let best = null;
@@ -851,9 +889,10 @@ const SG = (() => {
         if (b.host) { hosted++; sum += rank.get(b.host); const own = where.get(b.host); if (own && own.venue === b.venue) same++; }
         disp += Math.abs(perm[i] - i);
       });
-      return { key: [-hosted, sum, -same, disp], bs };
+      const viol = blocked && blocked.violations ? blocked.violations(bs) : 0;
+      return { key: [viol, -hosted, sum, -same, disp], bs };
     };
-    const better = (a, b) => { for (let k = 0; k < 4; k++) if (a.key[k] !== b.key[k]) return a.key[k] < b.key[k]; return false; };
+    const better = (a, b) => { for (let k = 0; k < 5; k++) if (a.key[k] !== b.key[k]) return a.key[k] < b.key[k]; return false; };
     let seed = 7 + M;
     const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
     const ident = Array.from({ length: M }, (_, i) => i);
@@ -974,7 +1013,7 @@ const SG = (() => {
 
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { sheetSnapshot, SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { blockFor, sheetSnapshot, SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 
 /* Минимальная запись .xlsx без библиотек: ZIP без сжатия + SpreadsheetML.
