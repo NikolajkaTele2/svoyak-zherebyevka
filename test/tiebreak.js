@@ -120,4 +120,32 @@ for (let N = 25; N <= 48; N++) {
   }
 }
 assert(v1 === 0, 'отдых после одного тура: вели два тура подряд ' + v1);
-console.log('OK: отдых после одного тура (с ведущим ' + h1 + ' из ' + tot1 + '); личная встреча на каждом шаге (стыков: ' + sepsChecked + ', глубоких срабатываний: ' + deepH2H + '), перестрелка, делёж мест, отдых ведущих (с ведущим ' + hosted + ' из ' + total + ')');
+// Правило «не больше 4 игр подряд» (играет или ведёт): ни у кого нет 5 занятых волн подряд
+let runViol = 0, hostedS = 0, totalS = 0;
+for (let N = 25; N <= 40; N++) for (const scope of ['all', 'venue']) {
+  const s2 = { settings: { venues: { count: 5, perVenue: 2, order: 'hosts' } }, players: [], tours: [] };
+  for (let i = 0; i < N; i++) s2.players.push({ id: 'q' + i, name: 'Q' + i, rating: 1000 - i });
+  const hl = s2.players.map((p) => p.id);
+  const busy = {}; let len = 0;
+  for (let t = 0; t < 4; t++) {
+    const d = SG.drawNext(s2);
+    const tr = SG.placeTour({ battles: d.battles }, s2.settings.venues, hl, SG.hostBlocked(s2.tours, t, 'slots'), scope);
+    const W = Math.max(...tr.battles.map((b) => b.slot));
+    tr.battles.forEach((b) => {
+      const sl = len + b.slot - 1;
+      [...b.players, b.host].filter(Boolean).forEach((id) => { (busy[id] = busy[id] || new Set()).add(sl); });
+      b.players.forEach((id, k) => (b.scores[id] = (k * 37 + t * 11 + N) % 90)); totalS++; if (b.host) hostedS++;
+    });
+    len += W; s2.tours.push(tr);
+  }
+  for (const id in busy) { let r = 0; for (let x = 0; x < len; x++) { r = busy[id].has(x) ? r + 1 : 0; if (r >= 5) { runViol++; break; } } }
+}
+assert(runViol === 0, '5 занятых волн подряд: ' + runViol);
+assert(hostedS / totalS > 0.85, 'с правилом волн ведущих достаточно: ' + hostedS + ' из ' + totalS);
+const brule = SG.hostBlocked([{ battles: [{ players: ['a', 'b', 'c'], slot: 1, host: null }, { players: ['d', 'e', 'f'], slot: 2, host: 'a' }] }], 1, 'slots');
+assert(!brule.has('a'), 'финал не считается');
+assert(brule.forBattles([{ players: ['a', 'x', 'y'], slot: 1 }, { players: ['z', 'w', 'v'], slot: 2 }]).has('a', 2), 'a: играл 1, вёл 2, играет 1, ведёт 2 → 4 + запас = 5 — нельзя');
+assert(brule.forBattles([{ players: ['z', 'x', 'y'], slot: 1 }, { players: ['a', 'w', 'v'], slot: 2 }]).has('a', 1), 'a: играл 1, вёл 2, ведёт 1, играет 2 → 4 и запас — нельзя');
+const brule2 = SG.hostBlocked([{ battles: [{ players: ['d', 'e', 'f'], slot: 1, host: null }, { players: ['a', 'b', 'c'], slot: 2, host: null }] }], 1, 'slots');
+assert(!brule2.forBattles([{ players: ['z', 'x', 'y'], slot: 1 }, { players: ['a', 'w', 'v'], slot: 2 }]).has('a', 1), 'a: играл 2, ведёт 1, играет 2 → 3 и запас = 4 — можно');
+console.log('OK: не больше 4 игр подряд (с ведущим ' + hostedS + ' из ' + totalS + '); отдых после одного тура (с ведущим ' + h1 + ' из ' + tot1 + '); личная встреча на каждом шаге (стыков: ' + sepsChecked + ', глубоких срабатываний: ' + deepH2H + '), перестрелка, делёж мест, отдых ведущих (с ведущим ' + hosted + ' из ' + total + ')');

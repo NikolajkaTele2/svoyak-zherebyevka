@@ -226,10 +226,11 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   function normalize(s) {
     s.settings = Object.assign({ seed1: 'pots', evenBattles: false, tiebreaks: ['score', 'buch'], h2hEach: true, hostScope: 'venue' }, s.settings || {});
     s.settings.venues = Object.assign({ count: 0, perVenue: 2, names: [] }, s.settings.venues || {});
-    // новые турниры: раскладка боёв «под ведущих» и отдых ведущего после каждого тура;
+    // новые турниры: раскладка боёв «под ведущих» и правило «не больше 4 игр подряд»;
     // в уже начатых турнирах остаётся прежнее правило
     if (!s.settings.venues.order || (s.settings.venues.order === 'pairs' && !(s.tours && s.tours.length))) s.settings.venues.order = s.tours && s.tours.length ? 'waves' : 'hosts';
-    if (s.settings.hostRest !== 1 && s.settings.hostRest !== 2) s.settings.hostRest = s.tours && s.tours.length ? 2 : 1;
+    if (s.settings.hostRest !== 1 && s.settings.hostRest !== 2 && s.settings.hostRest !== 'slots') s.settings.hostRest = s.tours && s.tours.length ? 2 : 'slots';
+    else if (s.settings.hostRest === 1 && !(s.tours && s.tours.length) && !s.settings.hostRestChosen) s.settings.hostRest = 'slots';
     if (!Array.isArray(s.settings.venues.names)) s.settings.venues.names = [];
     if (!Array.isArray(s.hosts)) s.hosts = [];
     s.settings.tiebreaks = SG.tbOrder(s); // в списке только баллы и сила соперников; личная встреча — отдельная проверка
@@ -270,7 +271,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       st.players.push({ id: 'd' + i, name: (fem.has(f) ? l + 'а' : l) + ' ' + f, rating: 1000 + Math.round(r() * 900) });
     }
     st.settings.venues = { count: 5, perVenue: 2, order: 'hosts', names: ['Альфа', 'Бета', 'Гамма', 'Дельта', 'Эпсилон'] };
-    st.settings.hostRest = 1;
+    st.settings.hostRest = 'slots';
     st.hosts = ['d3', 'd12', 'd7', 'd20', 'd1', 'd25', 'd16', 'd9', 'd28', 'd5', 'd14', 'd22'];
     for (let t = 0; t < 2; t++) {
       const d = SG.drawNext(st);
@@ -292,7 +293,8 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   normalize(state);
 
   const venCfg = () => state.settings.venues;
-  const hostRest = () => (state.settings.hostRest === 2 ? 2 : 1);
+  const hostRest = () => (state.settings.hostRest === 2 ? 2 : state.settings.hostRest === 1 ? 1 : 'slots');
+  const tiredText = (fin) => (hostRest() === 'slots' ? (fin ? '' : 'было бы 5 игр подряд') : hostRest() === 1 ? (fin ? 'вёл в туре 4' : 'вёл в прошлом туре') : (fin ? 'ведёт третий раз подряд' : 'ведёт третий тур подряд'));
   const hostScope = () => state.settings.hostScope || 'venue';
   const hostIds = () => { const ids = new Set(state.players.map((p) => p.id)); return (state.hosts || []).filter((id) => ids.has(id)); };
   const venueName = (i) => ((state.settings.venues.names || [])[i] || '').trim() || 'Площадка ' + (i + 1);
@@ -904,6 +906,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         ${state.tours.length ? '<span class="muted" style="font-size:13px">Применится к следующей жеребьёвке. Для текущего тура — «Пересчитать ведущих» на его странице.</span>' : ''}
       </div>
       <div class="field"><span class="lab">Отдых ведущего</span>
+        <label class="radio"><input type="radio" name="hrest" value="slots" ${hostRest() === 'slots' ? 'checked' : ''} ${ed ? '' : 'disabled'}><span><b>Не больше 4 игр подряд</b> — в каждом туре две волны; человек занят в волне, если играет или ведёт. Ведущим не назначается тот, у кого получилось бы 5 занятых волн подряд (с запасом: следующую игру он может получить в первой волне). Финал не считается.</span></label>
         <label class="radio"><input type="radio" name="hrest" value="1" ${hostRest() === 1 ? 'checked' : ''} ${ed ? '' : 'disabled'}><span><b>После каждого тура с ведением</b> — один человек не ведёт два тура подряд.</span></label>
         <label class="radio"><input type="radio" name="hrest" value="2" ${hostRest() === 2 ? 'checked' : ''} ${ed ? '' : 'disabled'}><span><b>После двух туров подряд</b> — третий тур отдыхает.</span></label>
       </div>
@@ -974,7 +977,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     const hostLine = (b, bi) => {
       if (b.venue === null || b.venue === undefined) return '';
       const cands = SG.hostCandidates(tour.battles, bi, hs, blocked, hostScope());
-      const tired = b.host && blocked.has(b.host) ? '<small class="vnote warn">' + (hostRest() === 1 ? 'вёл в прошлом туре' : 'ведёт третий тур подряд') + '</small>' : '';
+      const tired = b.host && SG.blockFor(blocked, tour.battles).has(b.host, b.slot) ? '<small class="vnote warn">' + tiredText(false) + '</small>' : '';
       const from = (id) => { const c = cands.find((x) => x.id === id); return c ? 'бой ' + (c.battle + 1) : ''; };
       if (!canEdit()) {
         return `<div class="hostline${b.host ? '' : ' none'}"><span class="lab">Ведущий</span><span>${b.host ? esc(players[b.host].name) + ' <small class="muted">' + from(b.host) + '</small>' : 'не назначен'}</span>${tired}</div>`;
@@ -985,7 +988,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         <option value=""${b.host ? '' : ' selected'}>${cands.length ? '— не назначен —' : 'некому вести'}</option>
         ${listed.length ? `<optgroup label="Из списка ведущих">${listed.map(opt).join('')}</optgroup>` : ''}
         ${others.length ? `<optgroup label="${hostScope() === 'all' ? 'Другие свободные' : 'Другие отдыхающие на площадке'}">${others.map(opt).join('')}</optgroup>` : ''}
-        ${rest.length ? `<optgroup label="${hostRest() === 1 ? 'Вели в прошлом туре — отдыхают' : 'Вели два тура подряд — отдыхают'}">${rest.map(opt).join('')}</optgroup>` : ''}
+        ${rest.length ? `<optgroup label="${hostRest() === 'slots' ? 'Было бы 5 игр подряд — отдыхают' : hostRest() === 1 ? 'Вели в прошлом туре — отдыхают' : 'Вели два тура подряд — отдыхают'}">${rest.map(opt).join('')}</optgroup>` : ''}
       </select>`;
       return `<div class="hostline${b.host ? '' : ' none'}"><label class="lab" for="h-${t}-${bi}">Ведущий</label>${sel}${b.hostManual && !tired ? '<small class="muted">вручную</small>' : ''}${tired}</div>`;
     };
@@ -1063,7 +1066,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       ${listed.length ? `<optgroup label="Из списка ведущих">${listed.map((id) => `<option value="${id}"${id === b.host ? ' selected' : ''}>${esc(players[id].name)} · №${hs.indexOf(id) + 1}</option>`).join('')}</optgroup>` : ''}
       ${others.length ? `<optgroup label="Другие участники">${others.map((p) => `<option value="${p.id}"${p.id === b.host ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</optgroup>` : ''}
       ${resting.length ? `<optgroup label="${hostRest() === 1 ? 'Вели в туре 4 — отдыхают' : 'Вели туры 3 и 4 — отдыхают'}">${resting.map((p) => `<option value="${p.id}"${p.id === b.host ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</optgroup>` : ''}
-    </select>${b.host && blocked.has(b.host) ? '<small class="vnote warn">' + (hostRest() === 1 ? 'вёл в туре 4' : 'ведёт третий раз подряд') + '</small>' : ''}</div>`;
+    </select>${b.host && blocked.has(b.host) ? '<small class="vnote warn">' + tiredText(true) + '</small>' : ''}</div>`;
   }
 
   function finalTableHtml() {
@@ -1195,7 +1198,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       <p>Перед 4-м туром у участника не больше 9 бывших соперников, а всего в турнире 25–48 человек. Свободных соперников остаётся с запасом. Мы проверили алгоритм на 3600 смоделированных турнирах от 25 до 48 участников: повторных встреч не было ни разу. Если всё же возникнет повтор, приложение предупредит и подсветит бой.</p></section>
       <section><h3>6. Площадки и ведущие</h3>
       <p>Оператор задаёт число площадок (1–10), сколько боёв проходит на одной площадке (1–4) и их названия. По умолчанию бои раскладываются «под ведущих»: состав боёв не меняется, но волна и площадка каждого боя подбираются так, чтобы ведущий был у каждого боя, а вели по возможности те, кто выше в списке ведущих. Другой вариант — по кругу: при 10 боях и 5 площадках на первой площадке бои 1 и 6, на второй — 2 и 7 и так далее. Если мест меньше, чем боёв, приложение предупредит.</p>
-      <p>Ведущий боя — участник, который в этом бою отдыхает. По умолчанию — с той же площадки: бой ведёт кто-то из другого боя этой площадки. Из подходящих выбирается тот, кто выше в списке ведущих. Один человек ведёт не больше одного боя за тур и после тура с ведением следующий тур отдыхает (можно выбрать прежнее правило: отдых после двух туров подряд). Финал считается следующим туром после тура 4. Сначала приложение старается, чтобы ведущий был у каждого боя. Ведущего можно заменить вручную в карточке боя. Ведущий финала — первый из списка, кто не играет в финале.</p></section>
+      <p>Ведущий боя — участник, который в этом бою отдыхает. По умолчанию — с той же площадки: бой ведёт кто-то из другого боя этой площадки. Из подходящих выбирается тот, кто выше в списке ведущих. Один человек ведёт не больше одного боя за тур. Отдых — по правилу «не больше 4 игр подряд»: в каждом туре две волны, человек занят в волне, если играет или ведёт, и ведущим не назначается тот, у кого получилось бы 5 занятых волн подряд (следующую игру он может получить в первой волне — это учитывается заранее). Можно выбрать прежние правила: отдых после каждого тура с ведением или после двух туров подряд. Сначала приложение старается, чтобы ведущий был у каждого боя. Ведущего можно заменить вручную в карточке боя. Ведущий финала — первый из списка, кто не играет в финале.</p></section>
       <section><h3>7. Равенство очков и финал</h3>
       <p>Игроки с равными очками расставляются по шагам. Перед каждым шагом проверяется личная встреча: если все, кто сейчас равен, играли друг с другом, решает их общий бой (+1 за каждого из группы, кого обошёл в общем бою, −1 — кому уступил). Если хоть одна пара не встречалась или личная встреча никого не развела — решает следующий показатель: сумма баллов, затем сила соперников (порядок меняется в настройках). Кто остался равным после показателя, для них снова проверяется личная встреча — в маленькой группе шанс, что все играли друг с другом, выше.</p>
       <p>Если совпало всё: при борьбе за выход в тройку — перестрелка, её итог оператор вводит вручную (те, кто не попал в тройку, делят оставшиеся места); с 4-го места и ниже — места делятся, кубковые очки за эти места суммируются и делятся поровну. В таблице столбец «Решено» показывает, чем игрок оказался выше следующего. В финал выходят три лучших участника таблицы после 4-го тура.</p></section>
@@ -1271,7 +1274,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     } else if (el.id === 'gstour') { sheetCfg().tour = Number(el.value) || 0; gs.status = 'idle'; gs.lastSig = null; save(); render(); }
     else if (el.id === 'gslive') { sheetCfg().live = el.checked; save(); render(); }
     else if (el.name === 'vorder') { venCfg().order = ['waves', 'pairs', 'hosts'].includes(el.value) ? el.value : 'hosts'; save(); render(); }
-    else if (el.name === 'hrest') { state.settings.hostRest = el.value === '2' ? 2 : 1; save(); render(); }
+    else if (el.name === 'hrest') { state.settings.hostRest = el.value === '2' ? 2 : el.value === '1' ? 1 : 'slots'; state.settings.hostRestChosen = true; save(); render(); }
     else if (el.id === 'h2hEach') { state.settings.h2hEach = el.checked; save(); render(); }
     else if (el.id === 'vper') { venCfg().perVenue = Number(el.value) || 1; save(); render(); }
     else if (el.dataset.vname !== undefined) { refreshVenueCheck(); }

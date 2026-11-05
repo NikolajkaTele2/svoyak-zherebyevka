@@ -360,7 +360,7 @@ const SG = (() => {
 
   /* Правило занятости по слотам: у каждого тура столько слотов, сколько волн; в слоте человек занят,
      если играет или ведёт. Ведущим не назначается тот, у кого получилось бы L занятых слотов подряд
-     (считая прошлые туры и свою игру в этом туре). Финал — следующий слот после тура 4. */
+     (считая прошлые туры и свою игру в этом туре). Финал не считается. */
   function busyRule(tours, t, L, ahead) {
     const hist = new Map();
     let len = 0;
@@ -377,7 +377,7 @@ const SG = (() => {
     const longest = (id, cur, W, look) => { let r = tail(id), best = r; for (let s = 1; s <= W; s++) { if (cur.has(s)) { r++; if (r > best) best = r; } else r = 0; } if (look && r > 0 && r + 1 > best) best = r + 1; return best; };
     return {
       L,
-      has: (id) => tail(id) + 1 >= L, // для финала
+      has: () => false, // финал не считается: перед ним перерыв, и ведущий его почти всегда не из тройки
       forBattles(bs) {
         const W = Math.max(1, ...bs.map((b) => b.slot || 1));
         const play = new Map(); bs.forEach((b) => b.players.forEach((p) => play.set(p, b.slot || 1)));
