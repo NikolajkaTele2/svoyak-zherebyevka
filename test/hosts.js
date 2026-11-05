@@ -12,8 +12,22 @@ assert(chk.over.join() === '0', 'перебор мест на 1-й площад�
 const chk2 = SG.venueCheck(10, { count: 6, perVenue: 2 });
 assert(chk2.single.join() === '4,5', 'одиночные бои на площадках 5 и 6');
 
+// 1б. Соседние бои на одной площадке: 1 и 2, 3 и 4…; нечётные — первая волна
+const pp = SG.venuePlan(10, { count: 5, perVenue: 2, order: 'pairs' });
+assert(pp.map((p) => p.venue).join('') === '0011223344' && pp.map((p) => p.slot).join('') === '1212121212', 'пары: ' + JSON.stringify(pp));
+const p9 = SG.venuePlan(9, { count: 5, perVenue: 2, order: 'pairs' });
+assert(p9[8].venue === 4 && p9[8].slot === 1 && SG.venueCheck(9, { count: 5, perVenue: 2, order: 'pairs' }).single.join() === '4', '9 боёв: последний один на 5-й площадке');
+const p11 = SG.venuePlan(11, { count: 5, perVenue: 2, order: 'pairs' });
+assert(p11[10].venue === 0 && p11[10].slot === 3, '11-й бой — третьим на первой площадке');
+const p3 = SG.venuePlan(9, { count: 3, perVenue: 3, order: 'pairs' });
+assert(p3.map((p) => p.venue + '' + p.slot).join() === '01,02,03,11,12,13,21,22,23', 'по 3 боя на площадке');
 // 2. Ведущие: бой 1 ведёт кто-то из боя 6 и наоборот, выбирается тот, кто выше в списке
 const mk = (n, size = 3) => Array.from({ length: n }, (_, i) => ({ players: Array.from({ length: size }, (_, j) => 'p' + (i * size + j)), scores: {} }));
+// при парах сильный бой ведёт игрок соседнего боя
+let tp = { battles: mk(10) };
+SG.placeTour(tp, { count: 5, perVenue: 2, order: 'pairs' }, ['p3', 'p0']);
+assert(tp.battles[0].host === 'p3' && tp.battles[1].host === 'p0', 'бой 1 ведёт игрок боя 2 и наоборот');
+
 let tour = { battles: mk(10) };
 const hosts = ['p17', 'p16', 'p1', 'p0', 'p15']; // p15..p17 — бой 6, p0..p2 — бой 1
 SG.placeTour(tour, { count: 5, perVenue: 2 }, hosts);

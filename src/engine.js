@@ -317,6 +317,11 @@ const SG = (() => {
   function venuePlan(m, cfg) {
     const V = cfg && cfg.count ? Math.max(1, Math.min(10, cfg.count | 0)) : 0;
     if (!V) return null;
+    if (cfg.order === 'pairs') {
+      // соседние по силе бои — на одной площадке в разных волнах: 1 и 2, 3 и 4, …
+      const K = Math.max(1, cfg.perVenue | 0 || 1);
+      return Array.from({ length: m }, (_, i) => { const g = Math.floor(i / K); return { venue: g % V, slot: (i % K) + 1 + K * Math.floor(g / V) }; });
+    }
     return Array.from({ length: m }, (_, i) => ({ venue: i % V, slot: Math.floor(i / V) + 1 }));
   }
 
@@ -342,10 +347,13 @@ const SG = (() => {
   }
 
   /* Кто может вести бой bi: участники других боёв той же площадки в этом туре. */
-  /* Кто вёл бои в двух предыдущих турах подряд — в туре t автоматически не назначается. */
-  function hostBlocked(tours, t) {
+  /* Отдых ведущих. rest = 2: кто вёл в двух предыдущих турах подряд, в туре t не назначается;
+     rest = 1: кто вёл в предыдущем туре, в туре t не назначается. */
+  function hostBlocked(tours, t, rest) {
     const hosted = (k) => new Set(k >= 0 && tours[k] ? tours[k].battles.map((b) => b.host).filter(Boolean) : []);
-    const a = hosted(t - 1), b = hosted(t - 2);
+    const a = hosted(t - 1);
+    if (rest === 1) return a;
+    const b = hosted(t - 2);
     return new Set([...a].filter((id) => b.has(id)));
   }
 

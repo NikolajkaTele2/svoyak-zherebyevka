@@ -80,6 +80,10 @@ assert(bl.has('x') && !bl.has('y') && !bl.has('z'), 'x вёл туры 1 и 2 �
 bl = SG.hostBlocked([T(['x']), T(['x']), T(['y'])], 3);
 assert(!bl.has('x'), 'x пропустил тур 3 — в туре 4 снова может вести');
 assert(SG.finalHost(['a'], ['x', 'y'], new Set(['x'])) === 'y', 'финал: пропуск отдыхающего ведущего');
+bl = SG.hostBlocked([T(['x', 'y']), T(['z'])], 2, 1);
+assert(bl.has('z') && !bl.has('x') && bl.size === 1, 'отдых после одного тура: блокируется только ведущий прошлого тура');
+bl = SG.hostBlocked([T(['x'])], 1, 1);
+assert(bl.has('x'), 'отдых после одного тура: x вёл тур 1 — в туре 2 отдыхает');
 
 // Полные турниры: никто не ведёт три тура подряд, ведущих по-прежнему много
 let violations = 0, hosted = 0, total = 0;
@@ -99,4 +103,21 @@ for (let N = 25; N <= 48; N++) {
   }
 }
 assert(violations === 0, 'три тура подряд: ' + violations);
-console.log('OK: личная встреча на каждом шаге (стыков: ' + sepsChecked + ', глубоких срабатываний: ' + deepH2H + '), перестрелка, делёж мест, отдых ведущих (с ведущим ' + hosted + ' из ' + total + ')');
+let v1 = 0, h1 = 0, tot1 = 0;
+for (let N = 25; N <= 48; N++) {
+  const s1 = { settings: { venues: { count: 5, perVenue: 2, order: 'pairs' } }, players: [], tours: [] };
+  for (let i = 0; i < N; i++) s1.players.push({ id: 'q' + i, name: 'Q' + i, rating: 1000 - i });
+  const hl = s1.players.map((p) => p.id);
+  for (let t = 0; t < 4; t++) {
+    const d = SG.drawNext(s1);
+    const tr = SG.placeTour({ battles: d.battles }, s1.settings.venues, hl, SG.hostBlocked(s1.tours, t, 1), 'all');
+    tr.battles.forEach((b) => { b.players.forEach((id, k) => (b.scores[id] = (k * 37 + t * 11 + N) % 90)); tot1++; if (b.host) h1++; });
+    s1.tours.push(tr);
+  }
+  for (let t = 1; t < 4; t++) {
+    const h = (k) => new Set(s1.tours[k].battles.map((b) => b.host).filter(Boolean));
+    for (const id of h(t)) if (h(t - 1).has(id)) v1++;
+  }
+}
+assert(v1 === 0, 'отдых после одного тура: вели два тура подряд ' + v1);
+console.log('OK: отдых после одного тура (с ведущим ' + h1 + ' из ' + tot1 + '); личная встреча на каждом шаге (стыков: ' + sepsChecked + ', глубоких срабатываний: ' + deepH2H + '), перестрелка, делёж мест, отдых ведущих (с ведущим ' + hosted + ' из ' + total + ')');
