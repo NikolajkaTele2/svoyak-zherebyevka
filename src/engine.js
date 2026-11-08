@@ -7,7 +7,10 @@ const SG = (() => {
 
   /* Размеры боёв: максимум по 3, бои по 4 — только чтобы закрыть остаток (b = N mod 3).
      even = true: если боёв нечётное число, 4 боя по 3 заменяются на 3 боя по 4 (боёв становится на один меньше). */
-  function battleSizes(n, even) {
+  /* maxBattles — сколько боёв помещается на площадки за тур (площадок × боёв на площадке).
+     Если обычная разбивка не влезает, боёв становится меньше, а боёв по 4 больше — в том числе у лидеров;
+     тройки, если остались, всё равно наверху. */
+  function battleSizes(n, even, maxBattles) {
     if (n === 3 || n === 4) return [n];
     let b = n % 3;
     let a = (n - 4 * b) / 3;
@@ -16,9 +19,18 @@ const SG = (() => {
       a -= 4;
       b += 3;
     }
+    if (maxBattles && a + b > maxBattles) {
+      let M = Math.max(maxBattles, Math.ceil(n / 4));
+      if (even && M % 2 === 1 && (M - 1) * 4 >= n) M--;
+      b = n - 3 * M; a = M - b;
+    }
     return Array(a).fill(3).concat(Array(b).fill(4)); // сверху вниз: тройки у лидеров, четвёрки внизу
   }
-  const sizesFor = (state, n) => battleSizes(n, !!(state.settings && state.settings.evenBattles));
+  const venueCap = (state) => {
+    const st = state.settings || {}, v = st.venues || {};
+    return st.fitVenues !== false && v.count > 0 ? v.count * Math.max(1, v.perVenue | 0 || 1) : 0;
+  };
+  const sizesFor = (state, n) => battleSizes(n, !!(state.settings && state.settings.evenBattles), venueCap(state));
 
   /* Места и очки одного боя с делёжкой. null, если не все баллы введены. */
   function battleResult(battle) {
@@ -665,6 +677,6 @@ const SG = (() => {
 
   const fmt = (x) => (Math.round(x * 100) / 100).toString().replace('.', ',');
 
-  return { blockFor, sheetSnapshot, SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
+  return { venueCap, blockFor, sheetSnapshot, SEP, groupKey, cupForPlace, cupPoints, finalStandings, hostBlocked, tbOrder, headToHead, venuePlan, venueCheck, venueGroups, hostCandidates, assignHosts, placeTour, finalHost, QUAL_TOURS, PTS, battleSizes, sizesFor, battleResult, tourComplete, metPairs, standings, drawFirst, drawSwiss, drawNext, repeatsInTour, fmt, pairKey, TB };
 })();
 if (typeof module !== 'undefined') module.exports = SG;

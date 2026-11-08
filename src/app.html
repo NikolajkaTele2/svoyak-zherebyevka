@@ -229,6 +229,8 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     // новые турниры: раскладка боёв «под ведущих» и правило «не больше 4 игр подряд»;
     // в уже начатых турнирах остаётся прежнее правило
     if (!s.settings.venues.order || (s.settings.venues.order === 'pairs' && !(s.tours && s.tours.length))) s.settings.venues.order = s.tours && s.tours.length ? 'waves' : 'hosts';
+    // в начатом турнире разбивку не меняем: если первый тур уже вышел за площадки, так и продолжаем
+    if (s.settings.fitVenues === undefined && s.tours && s.tours.length) { const v = s.settings.venues; s.settings.fitVenues = !(v.count > 0 && s.tours[0].battles.length > v.count * (v.perVenue || 1)); }
     if (s.settings.hostRest !== 1 && s.settings.hostRest !== 2 && s.settings.hostRest !== 'slots') s.settings.hostRest = s.tours && s.tours.length ? 2 : 'slots';
     else if (s.settings.hostRest === 1 && !(s.tours && s.tours.length) && !s.settings.hostRestChosen) s.settings.hostRest = 'slots';
     if (!Array.isArray(s.settings.venues.names)) s.settings.venues.names = [];
@@ -639,15 +641,23 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   const filled = (tour) => tour.battles.filter((b) => SG.battleResult(b)).length;
 
   function evenNote(n) {
-    const base = SG.battleSizes(n, false), ev = SG.battleSizes(n, true);
+    const cap = SG.venueCap(state);
+    const base = SG.battleSizes(n, false, cap), ev = SG.battleSizes(n, true, cap);
     if (!base) return '';
     const M = base.length;
     if (M % 2 === 0) return 'Для ' + n + ' участников боёв и так чётное число: ' + M + '.';
     if (ev.length === M) return 'Для ' + n + ' участников чётное число боёв не получается.';
     return 'Без галочки: ' + sizesText(n, false) + ' — ' + M + ' ' + plural(M, 'бой', 'боя', 'боёв') + '. С галочкой: ' + sizesText(n, true) + ' — ' + ev.length + ' ' + plural(ev.length, 'бой', 'боя', 'боёв') + '.';
   }
+  function fitNote(n) {
+    const plain = SG.battleSizes(n, !!state.settings.evenBattles), cap = SG.venueCap(Object.assign({}, state, { settings: Object.assign({}, state.settings, { fitVenues: true }) }));
+    if (!plain || !cap || plain.length <= cap) return '';
+    const fit = SG.battleSizes(n, !!state.settings.evenBattles, cap);
+    if (fit.length > cap) return '<p class="vnote warn">Даже по 4 в каждом бою ' + n + ' участников не помещаются в ' + cap + ' мест: нужно ' + fit.length + ' ' + plural(fit.length, 'бой', 'боя', 'боёв') + '.</p>';
+    return '<p class="muted" style="font-size:13px">Обычная разбивка — ' + plain.length + ' ' + plural(plain.length, 'бой', 'боя', 'боёв') + ', мест ' + cap + '.' + (state.settings.fitVenues !== false ? ' Поэтому сейчас: ' + sizesText(n) + '.' : '') + '</p>';
+  }
   function sizesText(n, even) {
-    const s = SG.battleSizes(n, even === undefined ? !!state.settings.evenBattles : even);
+    const s = SG.battleSizes(n, even === undefined ? !!state.settings.evenBattles : even, SG.venueCap(state));
     if (!s) return n < 6 ? 'нужно хотя бы 6 участников' : 'нельзя разбить на бои по 3–4';
     const a = s.filter((x) => x === 3).length, b = s.filter((x) => x === 4).length;
     const parts = [];
@@ -827,9 +837,10 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         <section class="panel">
           <h2>Разбивка на бои</h2>
           <p><b class="num">${n}</b> ${plural(n, 'участник', 'участника', 'участников')} → ${sizesText(n)}.</p>
-          <p class="muted">Бои по 3 — у лидеров. Если число участников не делится на 3, один или два нижних боя проходят вчетвером.</p>
+          <p class="muted">Бои по 3 — у лидеров. Если число участников не делится на 3, один или два нижних боя проходят вчетвером. Если бои не помещаются в площадки, вчетвером играют и верхние бои.</p>
           <label class="radio"><input type="checkbox" id="evenb" ${state.settings.evenBattles ? 'checked' : ''} ${evenLocked ? 'disabled' : ''}><span><b>Чётное число боёв</b> — если боёв получается нечётное число, 4 боя по 3 заменяются на 3 боя по 4. Бои по 4 остаются внизу таблицы.${state.tours.length ? ' Настройка закрыта после жеребьёвки первого тура.' : ''}</span></label>
           ${n >= 6 ? `<p class="muted" style="font-size:13px">${evenNote(n)}</p>` : ''}
+          ${state.settings.venues && state.settings.venues.count > 0 ? `<label class="radio"><input type="checkbox" id="fitv" ${state.settings.fitVenues !== false ? 'checked' : ''} ${evenLocked ? 'disabled' : ''}><span><b>Уместить в площадки</b> — если обычная разбивка не помещается в ${SG.venueCap(Object.assign({}, state, { settings: Object.assign({}, state.settings, { fitVenues: true }) }))} мест (площадок × боёв на площадке), боёв становится меньше, а по 4 играют и лидеры. Без галочки лишние бои идут третьей волной.</span></label>${fitNote(n)}` : ''}
           ${canDraw ? '<div><button class="btn primary big" data-act="draw">Жеребьёвка 1 тура</button></div>' : ''}
         </section>
         ${venuesPanel()}
@@ -1266,6 +1277,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       tb[i] = val; save(); render();
     } else if (el.name === 'seed1') { state.settings.seed1 = el.value; save(); }
     else if (el.id === 'evenb') { state.settings.evenBattles = el.checked; save(); render(); }
+    else if (el.id === 'fitv') { state.settings.fitVenues = el.checked; save(); render(); }
     else if (el.id === 'vcount') { venCfg().count = Number(el.value) || 0; save(); render(); }
     else if (el.name === 'hscope') { state.settings.hostScope = el.value; save(); render(); }
     else if (el.id === 'gsurl' || el.id === 'gskey') {

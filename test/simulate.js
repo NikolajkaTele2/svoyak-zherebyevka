@@ -52,4 +52,21 @@ const splitOk = r4.b.pts === 0.5 && r4.a.pts === 2 && r3.a.pts === 1.5 && r3.c.p
 if (!splitOk) console.error('Неверная делёжка очков');
 
 if (fails || worst || sizeErrors || !splitOk) { console.error('ОШИБКА'); process.exit(1); }
+// уместить в площадки: 38 участников, 5 × 2 = 10 мест → 8 боёв по 4 и 2 по 3 (тройки наверху)
+const f38 = SG.battleSizes(38, false, 10);
+if (f38.join() !== '3,3,4,4,4,4,4,4,4,4') { console.error('ОШИБКА: 38 в 10 мест', f38); process.exit(1); }
+if (SG.battleSizes(30, false, 10).join() !== SG.battleSizes(30, false).join()) { console.error('ОШИБКА: 30 и так влезает'); process.exit(1); }
+if (SG.battleSizes(41, false, 10).length !== 11) { console.error('ОШИБКА: 41 в 10 мест не влезает, 11 боёв по 4 и меньше'); process.exit(1); }
+for (let N = 31; N <= 40; N++) {
+  const st = { settings: { venues: { count: 5, perVenue: 2 } }, players: [], tours: [] };
+  for (let i = 0; i < N; i++) st.players.push({ id: 'f' + i, name: 'F' + i, rating: 1000 - i });
+  for (let t = 0; t < 4; t++) {
+    const d = SG.drawNext(st);
+    if (d.battles.length > 10) { console.error('ОШИБКА: не уместилось', N, d.battles.length); process.exit(1); }
+    if (d.repeats) { console.error('ОШИБКА: повторы при', N); process.exit(1); }
+    d.battles.forEach((b) => b.players.forEach((id, k) => (b.scores[id] = (k * 37 + t * 11 + N) % 90)));
+    st.tours.push({ battles: d.battles });
+  }
+}
+console.log('OK: уместить в площадки — до 40 участников в 10 мест без повторов');
 console.log('OK: повторных встреч нет, разбивка и очки верны');
