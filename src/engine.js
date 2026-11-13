@@ -637,7 +637,7 @@ const SG = (() => {
           const res = battleResult(b);
           const venue = hasV ? b.venue : bi % V, slot = hasV ? b.slot || 1 : Math.floor(bi / V) + 1;
           return {
-            n: bi + 1, venue, slot, venueName: hasV ? names[venue] || 'Площадка ' + (venue + 1) : '', host: nm(b.host),
+            n: bi + 1, venue, slot, venueName: hasV ? names[venue] || 'Площадка ' + (venue + 1) : '', host: b.hostName || nm(b.host),
             players: b.players.map((id) => {
               const s = b.scores[id];
               return { seed: seed[id], name: nm(id), score: s === null || s === undefined || s === '' ? null : Number(s), pts: res ? res[id].pts : null };
@@ -663,7 +663,7 @@ const SG = (() => {
     if (fin) {
       const fr = battleResult(fin);
       final = {
-        host: nm(fin.host),
+        host: fin.hostName || nm(fin.host),
         players: fin.players.map((id) => ({ name: nm(id), score: fin.scores[id] === null || fin.scores[id] === undefined || fin.scores[id] === '' ? null : Number(fin.scores[id]), place: fr ? fr[id].place : null }))
           .sort((a, b) => (fr ? b.score - a.score : 0)),
       };

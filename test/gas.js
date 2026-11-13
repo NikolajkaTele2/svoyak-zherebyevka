@@ -119,4 +119,9 @@ const env3 = makeEnv();
 env3.ss.insertSheet = () => { throw new Error('нет прав'); };
 r = env3.post({ key: K, tour: 1, snap: SG.sheetSnapshot(A) });
 assert(!r.ok && r.error === 'exception' && /нет прав/.test(r.message), 'текст ошибки уходит в приложение: ' + JSON.stringify(r));
+// 11. Ведущие не из игроков: имя ведущего площадки уходит в заголовок боя и в финал
+const X = tournament(30, 'X', { rounds: 1, lastEmpty: true });
+X.tours[0].battles.forEach((b) => { b.host = null; b.hostName = 'Внешний' + b.venue + ' Ведущий'; });
+const snapX = SG.sheetSnapshot(X);
+assert(snapX.rounds[0].battles[0].host === 'Внешний' + X.tours[0].battles[0].venue + ' Ведущий', 'имя ведущего площадки в снимке');
 console.log('OK: заливка в Google Таблицу (имитация): листы, цвета боёв, защита от чужого турнира, Отбор без худшего, 48 участников');
