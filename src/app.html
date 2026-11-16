@@ -201,6 +201,23 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
 
 .toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; font-size: 14px; z-index: 20; }
 .copybox { display: grid; gap: 8px; }
+/* Локальная подсветка участников: не входит в данные турнира и экспорт. */
+.player-bee, .player-pink {
+  --bg: #FFFDF5; --ink: #141938; --muted: #586087; --line: #CABF94;
+  --gold: #805600; --warn: #A9480F; --surface-2: #E8ECF8;
+  color: var(--ink); color-scheme: light;
+}
+.player-bee { --player-bg: #FFF0A6; }
+.player-pink { --player-bg: #FBE1EB; }
+.player-bee, .player-pink, .pl.player-bee, .pl.player-pink, .pl.swappable.player-bee:hover, .pl.swappable.player-pink:hover, tr.player-bee > td, tr.player-pink > td { background: var(--player-bg); }
+.player-bee:not(tr), .pl.swappable.player-bee:hover, tr.player-bee > td:first-child {
+  background-image: repeating-linear-gradient(135deg, #242424 0 6px, #F6C844 6px 12px);
+  background-size: 6px 100%; background-repeat: no-repeat;
+}
+.pod.player-bee .big, .pod.player-pink .big { color: var(--gold); }
+.pl.sel.player-bee, .pl.sel.player-pink { outline: 3px solid var(--focus); outline-offset: -3px; }
+.pl.swappable.player-bee:hover, .pl.swappable.player-pink:hover { box-shadow: inset 0 0 0 2px var(--focus); }
+tr.hl.player-bee > td, tr.hl.player-pink > td { box-shadow: inset 0 2px var(--focus), inset 0 -2px var(--focus); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -290,11 +307,18 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   }
 
   let state = null;
-  let ui = { tab: 'players', swap: false, sel: null, confirm: null, copyText: null, importOpen: false };
+  let ui = { tab: 'players', swap: false, sel: null, confirm: null, copyText: null, importOpen: false, highlightPlayers: false };
   try { Object.assign(ui, JSON.parse(localStorage.getItem(LS_UI) || '{}'), { swap: false, sel: null, confirm: null, copyText: null }); } catch (e) {}
   try { const raw = localStorage.getItem(LS_KEY); if (raw) state = JSON.parse(raw); } catch (e) {}
   if (!state) state = makeDemo();
   normalize(state);
+
+  const highlightNameKey = (name) => String(name || '').trim().toLowerCase().replace(/ё/g, 'е').split(/\s+/).sort().join(' ');
+  const highlightNames = new Map([
+    ...['Быстров Николай', 'Александров Андрей', 'Низамова Ирина', 'Баринов Никита', 'Ширяева Евгения'].map((name) => [highlightNameKey(name), 'player-bee']),
+    ...['Филаткин Михаил', 'Калякин Юрий', 'Соловьев Дмитрий', 'Митин Александр'].map((name) => [highlightNameKey(name), 'player-pink'])
+  ]);
+  const playerClass = (name) => ui.highlightPlayers === true ? highlightNames.get(highlightNameKey(name)) || '' : '';
 
   const venCfg = () => state.settings.venues;
   const hostRest = () => (state.settings.hostRest === 2 ? 2 : state.settings.hostRest === 1 ? 1 : 'slots');
@@ -580,7 +604,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     render();
   }
 
-  function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen, vview: ui.vview })); } catch (e) {} }
+  function saveUi() { try { localStorage.setItem(LS_UI, JSON.stringify({ tab: ui.tab, importOpen: ui.importOpen, vview: ui.vview, highlightPlayers: ui.highlightPlayers })); } catch (e) {} }
   function persistLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
   function save(immediate) {
     if (!state.id) state.id = newId();
@@ -798,7 +822,8 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         </div>
         <div class="row" style="gap:12px">${installPrompt ? '<button class="btn" data-act="install">Установить приложение</button>' : ''}<div style="display:grid;gap:2px;justify-items:end"><div class="syncnote" id="syncnote">${syncHtml()}</div><div class="syncnote" id="sheetnote"${sheetHtml() ? '' : ' hidden'}>${sheetHtml()}</div></div></div>
       </header>
-      <nav class="boardwrap" aria-label="Этапы турнира"><div class="board">${stageCells()}</div></nav>`;
+      <nav class="boardwrap" aria-label="Этапы турнира"><div class="board">${stageCells()}</div></nav>
+      <label class="radio"><input type="checkbox" id="highlightPlayers" ${ui.highlightPlayers === true ? 'checked' : ''}><span>Подсвечивать участников</span></label>`;
     if (state.example) html += `<div class="banner"><p><b>Это пример турнира</b> на 31 участника: два тура сыграны, третий разыгран. Посмотрите, как всё устроено, затем начните свой турнир.</p>${canEdit() ? '<button class="btn primary" data-act="new-ask">Начать свой турнир</button>' : ''}</div>`;
     if (ui.confirm === 'new') html += newDialog();
     if (FS_OK && fsync.ready && fsync.dir && fsync.file && fsync.perm !== 'granted' && ui.confirm !== 'new') {
@@ -829,8 +854,8 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
     const n = state.players.length;
     const sorted = state.players.slice().sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
     const rows = sorted.map((p, i) => locked
-      ? `<tr><td class="r num">${i + 1}</td><td class="name">${esc(p.name)}</td><td class="r num">${esc(p.rating)}</td></tr>`
-      : `<tr><td class="r num">${i + 1}</td><td><input type="text" id="pn-${p.id}" data-pname="${p.id}" value="${esc(p.name)}" aria-label="Имя"></td><td class="r"><input type="number" class="rt" id="pr-${p.id}" data-prating="${p.id}" value="${esc(p.rating)}" aria-label="Рейтинг"></td><td><button class="linkbtn" data-del="${p.id}" aria-label="Удалить ${esc(p.name)}">удалить</button></td></tr>`).join('');
+      ? `<tr class="${playerClass(p.name)}"><td class="r num">${i + 1}</td><td class="name">${esc(p.name)}</td><td class="r num">${esc(p.rating)}</td></tr>`
+      : `<tr class="${playerClass(p.name)}"><td class="r num">${i + 1}</td><td><input type="text" id="pn-${p.id}" data-pname="${p.id}" value="${esc(p.name)}" aria-label="Имя"></td><td class="r"><input type="number" class="rt" id="pr-${p.id}" data-prating="${p.id}" value="${esc(p.rating)}" aria-label="Рейтинг"></td><td><button class="linkbtn" data-del="${p.id}" aria-label="Удалить ${esc(p.name)}">удалить</button></td></tr>`).join('');
     const tb = state.settings.tiebreaks;
     const tbSelect = (i) => `<select id="tb${i}" data-tb="${i}" ${canEdit() ? '' : 'disabled'}>${Object.entries(SG.TB).map(([k, d]) => `<option value="${k}"${tb[i] === k ? ' selected' : ''}>${d.label}</option>`).join('')}</select>`;
     const canDraw = !state.tours.length && SG.sizesFor(state, n) && canEdit();
@@ -923,7 +948,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
 
   function hostsPanel() {
     const pl = byId(), hs = hostIds(), ed = canEdit();
-    const rows = hs.map((id, i) => `<li class="hrow"><span class="num hrank">${i + 1}</span><span class="hname">${esc(pl[id].name)}</span>${ed ? `<span class="hbtns"><button class="iconbtn" data-hmove="${i}:-1" aria-label="Выше" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" data-hmove="${i}:1" aria-label="Ниже" ${i < hs.length - 1 ? '' : 'disabled'}>↓</button><button class="iconbtn" data-hdel="${i}" aria-label="Убрать ${esc(pl[id].name)}">✕</button></span>` : ''}</li>`).join('');
+    const rows = hs.map((id, i) => `<li class="hrow ${playerClass(pl[id].name)}"><span class="num hrank">${i + 1}</span><span class="hname">${esc(pl[id].name)}</span>${ed ? `<span class="hbtns"><button class="iconbtn" data-hmove="${i}:-1" aria-label="Выше" ${i ? '' : 'disabled'}>↑</button><button class="iconbtn" data-hmove="${i}:1" aria-label="Ниже" ${i < hs.length - 1 ? '' : 'disabled'}>↓</button><button class="iconbtn" data-hdel="${i}" aria-label="Убрать ${esc(pl[id].name)}">✕</button></span>` : ''}</li>`).join('');
     const inList = new Set(hs);
     const rest = state.players.filter((p) => !inList.has(p.id)).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     const mode = hostMode();
@@ -1038,7 +1063,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         const r = res && res[id];
         const sel = ui.sel && ui.sel.id === id;
         const val = b.scores[id] === null || b.scores[id] === undefined ? '' : b.scores[id];
-        return `<div class="pl${ui.swap ? ' swappable' : ''}${sel ? ' sel' : ''}${repIds.has(id) && rep.length ? ' repp' : ''}" ${ui.swap ? `data-swap="${bi}:${id}" role="button" tabindex="0"` : ''}>
+        return `<div class="pl ${playerClass(p.name)}${ui.swap ? ' swappable' : ''}${sel ? ' sel' : ''}${repIds.has(id) && rep.length ? ' repp' : ''}" ${ui.swap ? `data-swap="${bi}:${id}" role="button" tabindex="0"` : ''}>
           <span class="seed">${t ? pos[id].rank : ''}</span>
           <span class="nm"><span>${esc(p.name)}</span><small>${t ? fmt(pos[id].pts) + ' оч.' : 'рейтинг ' + esc(p.rating)}</small></span>
           ${ui.swap ? '<span></span>' : `<input type="number" step="any" inputmode="numeric" id="s-${t}-${id}" data-score="${t}:${bi}:${id}" value="${esc(val)}" placeholder="баллы" aria-label="Баллы: ${esc(p.name)}" ${canEdit() ? '' : 'disabled'}>`}
@@ -1115,7 +1140,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   function finalTableHtml() {
     const f = SG.finalStandings(state);
     const cupTxt = (r) => (r.cup === 'Ф' ? 'Ф' : r.cup === null ? (f.played ? '?' : '—') : fmt(r.cup));
-    const rows = f.rows.map((r) => `<tr class="${r.finalist ? 'fin' : ''}"><td class="r num">${esc(r.place)}</td><td class="name">${esc(r.name)}</td><td class="r num cup">${cupTxt(r)}</td><td class="r num">${fmt(r.qPts)}</td><td class="r num">${r.qRank}</td><td class="r num">${r.finalScore === null ? '' : esc(r.finalScore)}</td></tr>`).join('');
+    const rows = f.rows.map((r) => `<tr class="${playerClass(r.name)} ${r.finalist ? 'fin' : ''}"><td class="r num">${esc(r.place)}</td><td class="name">${esc(r.name)}</td><td class="r num cup">${cupTxt(r)}</td><td class="r num">${fmt(r.qPts)}</td><td class="r num">${r.qRank}</td><td class="r num">${r.finalScore === null ? '' : esc(r.finalScore)}</td></tr>`).join('');
     const tieNames = f.rows.filter((r) => r.finalist && r.from === 1).map((r) => esc(r.name)).join(', ');
     return `<section style="display:grid;gap:12px">
       <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Итог турнира</span><h2>Итоговая таблица и кубковые очки</h2></div>
@@ -1148,12 +1173,12 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       const r = res && res[id];
       const val = b.scores[id] === null || b.scores[id] === undefined ? '' : b.scores[id];
       const q = st.find((x) => x.id === id);
-      return `<div class="pl"><span class="seed">${q.rank}</span><span class="nm"><span>${esc(p.name)}</span><small>${fmt(q.pts)} оч. в отборе</small></span><input type="number" step="any" inputmode="numeric" id="fs-${id}" data-fscore="${id}" value="${esc(val)}" placeholder="баллы" aria-label="Баллы: ${esc(p.name)}" ${canEdit() ? '' : 'disabled'}><span class="res">${r ? `<b>${r.place}</b><small>место</small>` : ''}</span></div>`;
+      return `<div class="pl ${playerClass(p.name)}"><span class="seed">${q.rank}</span><span class="nm"><span>${esc(p.name)}</span><small>${fmt(q.pts)} оч. в отборе</small></span><input type="number" step="any" inputmode="numeric" id="fs-${id}" data-fscore="${id}" value="${esc(val)}" placeholder="баллы" aria-label="Баллы: ${esc(p.name)}" ${canEdit() ? '' : 'disabled'}><span class="res">${r ? `<b>${r.place}</b><small>место</small>` : ''}</span></div>`;
     }).join('');
     let podium = '';
     if (res) {
       const order = b.players.slice().sort((x, y) => Number(b.scores[y]) - Number(b.scores[x]));
-      podium = `<div class="podium">${order.map((id) => `<div class="pod"><span class="big">${res[id].place}</span><span class="n">${esc(players[id].name)}</span><span class="num" style="opacity:.8">${esc(b.scores[id])} баллов</span></div>`).join('')}</div>`;
+      podium = `<div class="podium">${order.map((id) => `<div class="pod ${playerClass(players[id].name)}"><span class="big">${res[id].place}</span><span class="n">${esc(players[id].name)}</span><span class="num" style="opacity:.8">${esc(b.scores[id])} баллов</span></div>`).join('')}</div>`;
     }
     return `<section style="display:grid;gap:14px">
       <div style="display:grid;gap:2px"><span class="eyebrow">Финал</span><h2>Финальный бой</h2></div>
@@ -1179,7 +1204,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
       return `<div class="banner"><p>Порядок за выход в тройку задан по перестрелке: ${saved[1].map((id) => esc(pl[id] ? pl[id].name : id)).join(' → ')}.</p><button class="linkbtn" data-act="shoot-reset" data-key="${esc(saved[0])}">Отменить</button></div>`;
     }
     const draft = ui.shootDraft && ui.shootDraft.key === sh.key ? ui.shootDraft.ids : sh.ids;
-    const list = draft.map((id, i) => `<li class="hrow"><span class="num hrank">${sh.from + i}</span><span class="hname">${esc(pl[id].name)}</span>${canEdit() ? `<span class="hbtns"><button class="iconbtn" data-smove="${i}:-1" ${i ? '' : 'disabled'} aria-label="Выше">↑</button><button class="iconbtn" data-smove="${i}:1" ${i < draft.length - 1 ? '' : 'disabled'} aria-label="Ниже">↓</button></span>` : ''}</li>`).join('');
+    const list = draft.map((id, i) => `<li class="hrow ${playerClass(pl[id].name)}"><span class="num hrank">${sh.from + i}</span><span class="hname">${esc(pl[id].name)}</span>${canEdit() ? `<span class="hbtns"><button class="iconbtn" data-smove="${i}:-1" ${i ? '' : 'disabled'} aria-label="Выше">↑</button><button class="iconbtn" data-smove="${i}:1" ${i < draft.length - 1 ? '' : 'disabled'} aria-label="Ниже">↓</button></span>` : ''}</li>`).join('');
     return `<div class="banner warn" style="display:grid;gap:10px;justify-items:start">
       <p><b>Нужна перестрелка за выход в финал.</b> У игроков на местах ${sh.from}–${sh.to} совпало всё: очки, личные встречи, сумма баллов и сила соперников. Проведите перестрелку и расставьте их по её итогам — первые займут места до 3-го включительно, остальные поделят оставшиеся места.</p>
       <ol class="hlist" style="width:100%;max-width:420px">${list}</ol>
@@ -1202,7 +1227,7 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
         const tip = 'Соперники: ' + opps.map((o) => rk[o] + '. ' + nm[o]).join(', ');
         return `<td class="r"><span class="tcell"><span class="opps" title="${esc(tip)}" data-opps="${opps.join(',')}">${opps.map((o) => `<span>${rk[o]}</span>`).join('')}</span><span class="tp"><b>${fmt(x.pts)}</b><small>бой ${x.battle} · ${x.score}</small></span></span></td>`;
       }).join('');
-      return `<tr id="row-${r.id}" class="${fin && r.rank <= 3 ? 'fin' : ''}"><td class="r num">${esc(r.place)}</td><td class="name">${esc(r.name)}${fin && r.rank <= 3 ? ' <span class="chip">финал</span>' : ''}</td><td class="r num"><b>${fmt(r.pts)}</b></td>${cells}${tb.map((k) => `<td class="r num">${tbCell(k, r)}</td>`).join('')}<td class="sep${r.sep === 'rating' && r.rank <= 4 && fin ? ' warn' : ''}">${sepText(r) ? '↓ ' + sepText(r) : ''}</td></tr>`;
+      return `<tr id="row-${r.id}" class="${playerClass(r.name)} ${fin && r.rank <= 3 ? 'fin' : ''}"><td class="r num">${esc(r.place)}</td><td class="name">${esc(r.name)}${fin && r.rank <= 3 ? ' <span class="chip">финал</span>' : ''}</td><td class="r num"><b>${fmt(r.pts)}</b></td>${cells}${tb.map((k) => `<td class="r num">${tbCell(k, r)}</td>`).join('')}<td class="sep${r.sep === 'rating' && r.rank <= 4 && fin ? ' warn' : ''}">${sepText(r) ? '↓ ' + sepText(r) : ''}</td></tr>`;
     }).join('');
     return `<section style="display:grid;gap:14px">
       <div class="row spread"><div style="display:grid;gap:2px"><span class="eyebrow">Турнирная таблица</span><h2>После ${done} ${plural(done, 'тура', 'туров', 'туров')}</h2></div>
@@ -1309,7 +1334,8 @@ tr.hl td { background: color-mix(in srgb, var(--focus) 12%, transparent); }
   }
   app.addEventListener('change', (e) => {
     const el = e.target;
-    if (el.dataset.pname) { const p = state.players.find((x) => x.id === el.dataset.pname); if (p) { p.name = el.value.trim() || p.name; save(); } }
+    if (el.id === 'highlightPlayers') { ui.highlightPlayers = el.checked; saveUi(); return render(); }
+    if (el.dataset.pname) { const p = state.players.find((x) => x.id === el.dataset.pname); if (p) { p.name = el.value.trim() || p.name; el.closest('tr').className = playerClass(p.name); save(); } }
     else if (el.dataset.prating) { const p = state.players.find((x) => x.id === el.dataset.prating); if (p) { p.rating = Number(el.value) || 0; save(); render(); } }
     else if (el.dataset.tb !== undefined) {
       const i = Number(el.dataset.tb), val = el.value, tb = state.settings.tiebreaks;
