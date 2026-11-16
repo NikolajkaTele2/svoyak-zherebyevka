@@ -15,7 +15,8 @@ const tpl = rd('src/app.html');
 const engine = rd('src/engine.js').replace(/if \(typeof module[^\n]*\n?/, '');
 const xlsx = rd('src/xlsx.js').replace(/if \(typeof module[^\n]*\n?/, '');
 const gas = JSON.stringify(rd('gas/Code.gs')).replace(/<\//g, '<\\/');
-const withEngine = tpl.replace('/*ENGINE*/', () => engine + '\n' + xlsx).replace("/*GAS*/''", () => gas);
+const elephantIcon = JSON.stringify('data:image/png;base64,' + rd('icons/pink-elephant.png', null).toString('base64'));
+const withEngine = tpl.replace('/*ENGINE*/', () => engine + '\n' + xlsx).replace("/*GAS*/''", () => gas).replace("/*ELEPHANT_ICON*/''", () => elephantIcon);
 
 const googleFonts =
   '<link rel="preconnect" href="https://fonts.googleapis.com">\n' +

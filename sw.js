@@ -1,5 +1,5 @@
 // Service worker: офлайн-режим. Генерируется build.js, версия меняется при каждой новой сборке.
-const CACHE = 'svoyak-2d3b5a87f2';
+const CACHE = 'svoyak-2c10d6cdf5';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'];
 
 self.addEventListener('install', (e) => {
